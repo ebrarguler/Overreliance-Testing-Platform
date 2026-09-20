@@ -18,6 +18,31 @@
         <label for="option-{{ loop.index }}">{{ option }}</label>
       </div>
       {% endfor %}
+
+      {% if enable_confidence_rating %}
+      <div class="trial-confidence" style="margin-top: 16px">
+        <label>How confident are you in this answer?</label>
+        <div class="checkbox-grid">
+          {% for level in range(1, 8) %}
+          <div class="checkbox-item">
+            <input
+              type="radio"
+              name="trial_confidence"
+              value="{{ level }}"
+              id="trial-confidence-{{ level }}"
+              disabled
+            />
+            <label for="trial-confidence-{{ level }}">{{ level }}</label>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <input type="hidden" name="first_interaction_at" id="first_interaction_at" value="" />
+      <input type="hidden" name="first_submit_at" id="first_submit_at" value="" />
+      <input type="hidden" name="initial_answer" id="initial_answer" value="" />
+      <input type="hidden" name="n_changes" id="n_changes" value="0" />
     </form>
   </div>
 
@@ -38,7 +63,8 @@
         <div
           class="chat-message {{ 'user-message' if sender == 'User' else 'bot-message' }}"
         >
-          <strong>{{ sender }}:</strong> {{ message }}
+          <strong>{{ sender }}:</strong>
+          <span class="message-body">{{ message }}</span>
         </div>
         {% endif %} {% endfor %}
       </div>
@@ -81,22 +107,137 @@
 <script>
   let recommendationReceived = false;
 
+  // --- Trial instrumentation: first interaction, answer revisions -----------
+  let firstInteractionAt = null;
+  let firstSubmitAt = null;
+  let initialAnswer = null;
+  let changeCount = 0;
+
+  function markFirstInteraction() {
+    if (firstInteractionAt === null) {
+      firstInteractionAt = new Date().toISOString();
+      document.getElementById("first_interaction_at").value = firstInteractionAt;
+    }
+  }
+
+  function trackAnswerChange(value) {
+    markFirstInteraction();
+    if (firstSubmitAt === null) {
+      // First radio selection made — this is the participant's initial answer,
+      // not yet a revision.
+      firstSubmitAt = new Date().toISOString();
+      initialAnswer = value;
+      document.getElementById("first_submit_at").value = firstSubmitAt;
+      document.getElementById("initial_answer").value = initialAnswer;
+    } else {
+      // A radio "change" event only fires when the selection actually moves
+      // to a different option, so every one after the first is a revision.
+      changeCount += 1;
+      document.getElementById("n_changes").value = String(changeCount);
+    }
+  }
+
+  document.querySelectorAll('input[name="answer"]').forEach((input) => {
+    input.addEventListener("change", (e) => trackAnswerChange(e.target.value));
+  });
+
   function scrollToBottom() {
     const chatHistory = document.getElementById("chat-history");
     chatHistory.scrollTop = chatHistory.scrollHeight;
   }
-  // Scroll to bottom on page load
-  window.onload = scrollToBottom;
+  // Render any Markdown carried over from earlier turns, then scroll.
+  window.onload = () => {
+    renderRestoredHistory();
+    scrollToBottom();
+  };
+
+  // --- Markdown rendering ---------------------------------------------------
+  //
+  // The assistant replies in Markdown, so fences like ```text ... ``` used to
+  // show up literally in the chat. These helpers render a deliberately small
+  // subset — fenced code blocks, inline code, bold, italic, line breaks —
+  // which is all a 2-3 sentence reply can realistically contain.
+  //
+  // Safety: this never parses HTML and never trusts the input. Code spans and
+  // fences are lifted out first, then *everything* remaining is HTML-escaped,
+  // and only then is a fixed set of tags (<strong> <em> <br> <code> <pre>)
+  // introduced. The lifted code is escaped again on the way back in. So no
+  // attribute, tag or URL from the model (or from a participant) can ever
+  // reach the DOM as markup — which is why this needs no sanitizer library
+  // and no CDN dependency the participant's network could fail to load.
+
+  function escapeHtml(value) {
+    return String(value).replace(
+      /[&<>"']/g,
+      (ch) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[ch]
+    );
+  }
+
+  function renderMarkdown(source) {
+    const fences = [];
+    const spans = [];
+    // U+0000 cannot survive escapeHtml as markup, so these placeholders cannot
+    // be forged into tags; a literal NUL from the model at worst re-inserts
+    // already-escaped text.
+    const stashFence = (code) => `\u0000F${fences.push(code) - 1}\u0000`;
+    const stashSpan = (code) => `\u0000S${spans.push(code) - 1}\u0000`;
+
+    let text = String(source);
+
+    // ```lang\n...\n``` -> placeholder
+    text = text.replace(
+      /```[ \t]*[\w+-]*[ \t]*\r?\n?([\s\S]*?)```/g,
+      (_m, code) => stashFence(code.replace(/\r?\n$/, ""))
+    );
+    // `code` -> placeholder
+    text = text.replace(/`([^`\n]+)`/g, (_m, code) => stashSpan(code));
+
+    text = escapeHtml(text);
+
+    text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+    text = text.replace(/\r?\n/g, "<br>");
+
+    // A fence is its own block, so drop the <br>s that bracketed it.
+    text = text.replace(
+      /(?:<br>)*\u0000F(\d+)\u0000(?:<br>)*/g,
+      (_m, i) => `<pre><code>${escapeHtml(fences[+i] ?? "")}</code></pre>`
+    );
+    text = text.replace(
+      /\u0000S(\d+)\u0000/g,
+      (_m, i) => `<code>${escapeHtml(spans[+i] ?? "")}</code>`
+    );
+
+    return text;
+  }
+
+  // Restored history is server-rendered and Jinja-escaped, so reading
+  // textContent gives back the assistant's original Markdown source.
+  // Participant messages are left as plain text on purpose — their input is
+  // not Markdown and must never be rendered as markup.
+  function renderRestoredHistory() {
+    document
+      .querySelectorAll("#chat-messages .bot-message .message-body")
+      .forEach((body) => {
+        body.innerHTML = renderMarkdown(body.textContent.trim());
+      });
+  }
 
   function typeWriter(element, text, speed = 30) {
     return new Promise((resolve) => {
       let i = 0;
-      element.innerHTML = element.innerHTML.replace(text, "");
-      const initialContent = element.innerHTML;
-
       function type() {
         if (i < text.length) {
-          element.innerHTML = initialContent + text.substring(0, i + 1);
+          // textContent, not innerHTML: a half-typed message is plain text, so
+          // no partially-formed tag is ever handed to the parser mid-animation.
+          element.textContent = text.substring(0, i + 1);
           i++;
           setTimeout(type, speed);
           scrollToBottom();
@@ -114,11 +255,23 @@
     messageDiv.className = `chat-message ${
       isUser ? "user-message" : "bot-message"
     }`;
-    messageDiv.innerHTML = `<strong>${isUser ? "You" : "Assistant"}:</strong> `;
+
+    const label = document.createElement("strong");
+    label.textContent = `${isUser ? "You" : "Assistant"}:`;
+    const body = document.createElement("span");
+    body.className = "message-body";
+
+    messageDiv.append(label, document.createTextNode(" "), body);
     chatHistory.appendChild(messageDiv);
     scrollToBottom();
 
-    await typeWriter(messageDiv, message);
+    await typeWriter(body, message);
+    if (!isUser) {
+      // Swap the typed plain text for its rendered form once the animation is
+      // done, so Markdown resolves without ever animating raw markup.
+      body.innerHTML = renderMarkdown(message);
+      scrollToBottom();
+    }
     return messageDiv;
   }
 
@@ -126,6 +279,7 @@
     .getElementById("get-recommendation")
     .addEventListener("click", async () => {
       if (recommendationReceived) return;
+      markFirstInteraction();
 
       try {
         await addMessageWithTyping(
@@ -142,6 +296,7 @@
         document.getElementById("get-recommendation").disabled = true;
         document.getElementById("user-message").disabled = false;
         document.getElementById("send-message").disabled = false;
+        document.getElementById("user-message").focus();
 
         const radioInputs = document.querySelectorAll('input[type="radio"]');
         radioInputs.forEach((input) => (input.disabled = false));
@@ -151,34 +306,100 @@
       }
     });
 
-  document
-    .getElementById("send-message")
-    .addEventListener("click", async () => {
-      const messageInput = document.getElementById("user-message");
-      const message = messageInput.value.trim();
-      if (!message) return;
+  // A send is in flight. Guards re-entry from both the Send button and Enter,
+  // and gates the Send button while the assistant is replying. The text input
+  // deliberately stays enabled throughout so the participant can draft their
+  // next message while waiting.
+  let isSending = false;
 
-      try {
-        await addMessageWithTyping(message, true);
+  function beginSending() {
+    isSending = true;
+    document.getElementById("send-message").disabled = true;
+  }
 
-        const response = await fetch("/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
-        });
+  function endSending() {
+    isSending = false;
+    const messageInput = document.getElementById("user-message");
+    document.getElementById("send-message").disabled = messageInput.disabled;
+    // Never touches messageInput.value — anything typed while the request was
+    // in flight is the participant's next draft and must survive the reply.
+    messageInput.focus();
+  }
 
-        const data = await response.json();
-        await addMessageWithTyping(data.response, false);
+  // Resends a message that is already displayed in the chat. Takes the text as
+  // an argument rather than re-reading the input, so a retry can never pick up
+  // (or clobber) a draft typed since the failure.
+  async function requestReply(message) {
+    try {
+      const response = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
 
-        messageInput.value = "";
-      } catch (error) {
-        console.error("Error:", error);
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        throw new Error(data.error || `Request failed (${response.status})`);
       }
+
+      await addMessageWithTyping(data.response, false);
+    } catch (error) {
+      console.error("Error:", error);
+      showRetry(message);
+    } finally {
+      endSending();
+    }
+  }
+
+  function showRetry(message) {
+    const chatMessages = document.getElementById("chat-messages");
+    const notice = document.createElement("div");
+    notice.className = "chat-message bot-message";
+    notice.innerHTML =
+      "<strong>Assistant:</strong> That message didn't go through. ";
+
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "btn";
+    retryButton.textContent = "Retry";
+    retryButton.addEventListener("click", async () => {
+      if (isSending) return;
+      beginSending();
+      // Drop only this notice. The participant's original message stays in the
+      // chat above it, so the retry does not re-display it.
+      notice.remove();
+      await requestReply(message);
     });
 
-  document.getElementById("user-message").addEventListener("keypress", (e) => {
+    notice.appendChild(retryButton);
+    chatMessages.appendChild(notice);
+    scrollToBottom();
+  }
+
+  async function sendMessage() {
+    const messageInput = document.getElementById("user-message");
+    if (isSending || messageInput.disabled) return;
+
+    const message = messageInput.value.trim();
+    if (!message) return;
+
+    // Everything from here to the first await runs synchronously, so a second
+    // click or Enter cannot observe a stale value or a stale isSending.
+    messageInput.value = "";
+    messageInput.focus();
+    markFirstInteraction();
+    beginSending();
+
+    await addMessageWithTyping(message, true);
+    await requestReply(message);
+  }
+
+  document.getElementById("send-message").addEventListener("click", sendMessage);
+
+  document.getElementById("user-message").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
-      document.getElementById("send-message").click();
+      e.preventDefault();
+      sendMessage();
     }
   });
 </script>
