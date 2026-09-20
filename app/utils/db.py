@@ -10,7 +10,7 @@ from urllib.parse import quote_plus
 
 
 # Functions for interacting with MongoDB
-def init_db():
+def _get_client():
     # Load .env variables
     load_dotenv(find_dotenv())
 
@@ -24,15 +24,31 @@ def init_db():
     uri = username + ':' + password + '@' + cluster + authSource
 
     # Initialize MongoDB client
-    client = MongoClient(uri)
+    return MongoClient(uri)
 
+
+def get_client():
+    """Expose a MongoClient for uses outside this module that need direct
+    access (e.g. Flask-Session's MongoDB backend in app/__init__.py)."""
+    return _get_client()
+
+
+def get_collection(name):
+    """Return a collection from the `test` database by name (lazy connection,
+    matching init_db()'s behavior — no connection is made at import time)."""
     # Update later in production environment ---------------------------------- <<<
-    # Connect to database
-    users_db = client.test
+    return _get_client().test[name]
     # ------------------------------------------------------------------------- <<<
 
-    # Define your collections
-    return users_db.users
+
+def init_db():
+    return get_collection('users')
+
+
+def get_participant_count():
+    """Return the number of completed participant records in the collection."""
+    users_collection = init_db()
+    return users_collection.count_documents({})
 
 
 def find_user(user_email):
@@ -105,12 +121,16 @@ def insert_user_response(responses):
     update = {
         "$set": {
             "uf_id": responses["uf_id"],
+            "participant_id": responses.get("participant_id"),
+            "sequence_label": responses["sequence_label"],
             "question_order": responses["question_order"],
+            "variant_assignments": responses["variant_assignments"],
             "answers": responses["answers"],
             "pre_survey_answers": responses["pre_survey_answers"],
             "post_survey_answers": responses["post_survey_answers"],
             "final_survey_answers": responses["final_survey_answers"],
             "chat_history": responses["chat_history"],
+            "chat_transcript": responses.get("chat_transcript"),
             "firstName" : responses["firstName"],
             "lastName" : responses["lastName"],
             "classSchool" : responses["classSchool"],
