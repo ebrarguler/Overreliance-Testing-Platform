@@ -14,7 +14,14 @@ from flask import (
     jsonify,
     flash,
 )
-from .utils.db import insert_user_response, find_user
+from .utils.db import insert_user_response
+from .utils.participants import (
+    normalize_email,
+    is_valid_email,
+    get_or_create_participant,
+    mark_completed,
+)
+from .utils.sites import get_site, site_for_email, allowed_email_domains
 from .utils.assignment import get_or_create_assignment
 from .utils.trial_types import is_misleading
 from .utils.chat_prompting import build_system_message
@@ -33,6 +40,11 @@ from .utils.questions import (
     final_survey_questions,
 )
 from .utils.demographics import demographics_questions
+from .utils.pre_survey import (
+    PRE_SURVEY_PAGES,
+    page_field_names,
+    first_incomplete_page,
+)
 from dotenv import load_dotenv, find_dotenv
 from openai import OpenAI
 
@@ -56,13 +68,12 @@ OPENAI_MAX_COMPLETION_TOKENS = int(os.getenv("OPENAI_MAX_COMPLETION_TOKENS", "51
 def index():
     session.clear()
 
-    # Sequence + problem-rotation assignment happens once identity (email) is
-    # known, in validate_email() below — see app.utils.assignment. Assigning
-    # here (before we can identify the participant) would mean an anonymous
-    # page load with no follow-through could not be told apart from a real
-    # participant, and a returning participant reloading "/" would silently
-    # get reassigned instead of resuming their existing assignment.
-    session["pre_survey_data"] = []
+    # Participant identity, site, and sequence assignment are all settled
+    # once the email is known, in validate_email() below — see
+    # app.utils.participants, app.utils.sites and app.utils.assignment. A
+    # returning email resumes its existing assignment rather than being
+    # reassigned.
+    session["pre_survey_data"] = {}
     session["question_index"] = 0
     session["answers"] = []
     session["post_survey_answers"] = []
@@ -70,32 +81,32 @@ def index():
     session["chat_history"] = []
     session["chat_transcript"] = []
     session["participant_id"] = None
-    session["user"] = []
-    session["user_id"] = []
-    session["firstName"] = []
-    session["lastName"] = []
-    session["classSchool"] = []
+    session["site"] = None
     session["demographics"] = []
     session["times"] = []
     session["begin"] = 0
     session["elapsed_time"] = 0
     session["end_time"] = 0
     session["start_time"] = 0
-    
-    return render_template("index.html")
+
+    return render_template("index.html", domains=allowed_email_domains())
 
 @main_bp.route("/email_error")
 def email_error():
-    return render_template("email_error.html")
+    return render_template("email_error.html", domains=allowed_email_domains())
 
 @main_bp.route("/consent", methods=["GET", "POST"])
 def collect_consent():
+    site = get_site(session.get("site"))
+    if site is None:
+        return redirect(url_for("main.index"))
+
     if request.method == "POST":
         if request.form.get("consent"):
             session["consented"] = True
             return redirect(url_for("main.collect_demographics"))
         return redirect(url_for("main.index"))
-    return render_template("consent.html")
+    return render_template("consent.html", site=site)
 
 
 @main_bp.route("/demographics", methods=["GET", "POST"])
@@ -119,45 +130,26 @@ def collect_demographics():
     return render_template("demographics.html")
 
 
-@main_bp.route("/validate_email", methods=["GET", "POST"])
+@main_bp.route("/validate_email", methods=["POST"])
 def validate_email():
-    email = request.form.get("email")
-    user_id = request.form.get("id_number")
-    first_name = request.form.get("firstName")
-    last_name = request.form.get("lastName")
-    student_class = request.form.get("classSchool")
-
-    if not email:
+    email = normalize_email(request.form.get("email"))
+    site_key = site_for_email(email) if is_valid_email(email) else None
+    if site_key is None:
         return redirect(url_for("main.email_error"))
 
-    allowed_domain = os.getenv("ALLOWED_EMAIL_DOMAIN")
-    if allowed_domain and not email.endswith(allowed_domain):
-        return redirect(url_for("main.email_error"))
-
-    # Redirect to the quiz page if the email is valid
-    session["user"] = email
-    if user_id:
-        session["user_id"] = user_id
-        session["firstName"] = first_name
-        session["lastName"] = last_name
-        session["classSchool"] = student_class
-
-    if find_user(email):
+    participant = get_or_create_participant(email, site_key)
+    if participant["completed_at"] is not None:
         return redirect(url_for("main.thank_you"))
 
-    # Claim (or resume) this participant's sequence + problem-rotation
-    # assignment. get_or_create_assignment persists it keyed by email, so a
-    # participant who reloads or returns before finishing gets back the
-    # exact same assignment rather than being reassigned.
-    assignment = get_or_create_assignment(email, questions)
+    session["site"] = participant["site"]
+    session["participant_id"] = participant["participant_id"]
+
+    assignment = get_or_create_assignment(participant["participant_id"], questions)
     session["question_order"] = assignment["question_order"]
     session["variant_assignments"] = assignment["variant_assignments"]
     session["sequence_label"] = assignment["sequence_label"]
-    session["participant_id"] = assignment["participant_id"]
 
-    return redirect(
-        url_for("main.collect_consent")
-    )  # Change 'quiz' to the route that handles the quiz
+    return redirect(url_for("main.collect_consent"))
 
 
 @main_bp.route("/quiz", methods=["GET", "POST"])
@@ -484,41 +476,39 @@ def chat():
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 
-@main_bp.route("/pre_survey", methods=["GET", "POST"])
-def pre_survey():
+@main_bp.route("/pre_survey", defaults={"page": 1}, methods=["GET", "POST"])
+@main_bp.route("/pre_survey/<int:page>", methods=["GET", "POST"])
+def pre_survey(page):
+    if not 1 <= page <= len(PRE_SURVEY_PAGES):
+        return redirect(url_for("main.pre_survey"))
+    page_config = PRE_SURVEY_PAGES[page - 1]
+
+    # Answers from every page accumulate in one flat dict, so the stored
+    # pre_survey_answers document keeps the same shape as the single-page form.
+    answers = session.get("pre_survey_data")
+    if not isinstance(answers, dict):
+        answers = {}
+
     if request.method == "POST":
-        survey_data = {
-            "independent_programming": request.form.get("independent_programming"),
-            "learn_languages": request.form.get("learn_languages"),
-            "identify_improvements": request.form.get("identify_improvements"),
-            "ai_dependability": request.form.get("ai_dependability"),
-            "ai_reliability": request.form.get("ai_reliability"),
-            "ai_explanation": request.form.get("ai_explanation"),
-            "ai_dependency": request.form.get("ai_dependency"),
-            "incorrect_advice": request.form.get("incorrect_advice"),
-            "blind_trust": request.form.get("blind_trust"),
-            "learning_hindrance": request.form.get("learning_hindrance"),
-            "code_understanding": request.form.get("code_understanding"),
-            "solution_exploration": request.form.get("solution_exploration"),
-            "concept_understanding": request.form.get("concept_understanding"),
-            "self_solving": request.form.get("self_solving"),
-            "complex_problems": request.form.get("complex_problems"),
-            "fundamental_concepts": request.form.get("fundamental_concepts"),
-            "code_comprehension": request.form.get("code_comprehension"),
-            "data_structures": request.form.get("data_structures"),
-            "oop_principles": request.form.get("oop_principles"),
-            "explain_concepts": request.form.get("explain_concepts"),
-            "language_proficiency": request.form.get("language_proficiency"),
-            "ai_principles": request.form.get("ai_principles"),
-            "ai_use_cases": request.form.get("ai_use_cases"),
-            "ai_risks": request.form.get("ai_risks"),
-            "ai_prompting": request.form.get("ai_prompting"),
-            "ai_classroom_concerns": request.form.get("ai_classroom_concerns"),
-        }
-        session["pre_survey_data"] = survey_data
+        for name in page_field_names(page_config):
+            answers[name] = request.form.get(name)
+        session["pre_survey_data"] = answers
+
+        if page < len(PRE_SURVEY_PAGES):
+            return redirect(url_for("main.pre_survey", page=page + 1))
+        # Guard against a skipped page (e.g. typed URL) before moving on.
+        missing = first_incomplete_page(answers)
+        if missing is not None:
+            return redirect(url_for("main.pre_survey", page=missing))
         return redirect(url_for("main.instructions"))
 
-    return render_template("pre_survey.html")
+    return render_template(
+        "pre_survey.html",
+        page=page,
+        total_pages=len(PRE_SURVEY_PAGES),
+        page_config=page_config,
+        answers=answers,
+    )
 
 
 @main_bp.route("/instructions", methods=["GET"])
@@ -546,6 +536,9 @@ def post_survey():
 
 @main_bp.route("/final_survey", methods=["GET", "POST"])
 def final_survey():
+    if not session.get("participant_id"):
+        return redirect(url_for("main.index"))
+
     if request.method == "POST":
         survey_data = {
             "blind_acceptance": request.form.get("blind_acceptance"),
@@ -568,21 +561,12 @@ def final_survey():
         }
         session["final_survey_answers"] = survey_data
 
-        #print("Session Data Summary:")
-        #print(f"email: {session.get('user')}")
-        #print(f"uf id: {session.get('user_id')}")
-        #print(f"Question Order: {session.get('question_order')}")
-        #print(f"Answers: {session.get('answers')}")
-        #print(f"Post-survey answers: {session.get('post_survey_answers')}")
-        #print(f"Final survey answers: {session.get('final_survey_answers')}")
-
         # Create an empty dictionary to hold all the data
         combined_data = {}
 
         # Add each data element to the dictionary
-        combined_data["email"] = session.get("user")
-        combined_data["uf_id"] = session.get("user_id")
         combined_data["participant_id"] = session.get("participant_id")
+        combined_data["site"] = session.get("site")
         combined_data["question_order"] = session.get("question_order")
         combined_data["answers"] = session.get("answers")
         combined_data["pre_survey_answers"] = session.get("pre_survey_data")
@@ -590,9 +574,6 @@ def final_survey():
         combined_data["final_survey_answers"] = session.get("final_survey_answers")
         combined_data["chat_history"] = session.get("chat_history")
         combined_data["chat_transcript"] = session.get("chat_transcript")
-        combined_data["firstName"] = session.get("firstName")
-        combined_data["lastName"] = session.get("lastName")
-        combined_data["classSchool"] = session.get("classSchool")
         combined_data["demographics"] = session.get("demographics")
         combined_data["times"] = session.get("times")
         combined_data["variant_assignments"] = session.get("variant_assignments")
@@ -601,6 +582,7 @@ def final_survey():
         #print(f"Demographics answers: {session.get('demographics')}")
 
         insert_user_response(combined_data)
+        mark_completed(combined_data["participant_id"])
 
         return redirect(url_for("main.thank_you"))
 
@@ -609,4 +591,4 @@ def final_survey():
 
 @main_bp.route("/thank_you")
 def thank_you():
-    return render_template("thank_you.html", chat_history=session["chat_history"])
+    return render_template("thank_you.html", chat_history=session.get("chat_history", []))

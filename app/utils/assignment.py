@@ -13,16 +13,17 @@ in-process lock would not help — each worker has its own memory):
    completed-participant count only advances at the very end of the study).
 
 2. Persistence + resume. The realized assignment (sequence label,
-   type-at-position, problem-at-position, seed) is written once per email
-   and never recomputed for that email again — a participant who reloads
-   `/` or returns before finishing gets back the exact same assignment,
-   never a new one. A unique index on `email` plus catching the resulting
+   type-at-position, problem-at-position, seed) is written once per
+   participant_id and never recomputed for it again — a participant who
+   returns with the same email before finishing (app.utils.participants maps
+   email → participant_id) gets back the exact same assignment, never a new
+   one. A unique index on `participant_id` plus catching the resulting
    DuplicateKeyError closes the race where two concurrent first-visits for
-   the same brand-new email would otherwise both try to create one.
+   the same brand-new participant would otherwise both try to create one.
+   Email is never stored here — see app.utils.participants.
 """
 
 import datetime
-import uuid
 
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
@@ -40,7 +41,12 @@ def _sequence_counts_collection():
 
 def _assignments_collection():
     coll = get_collection("participant_assignments")
-    coll.create_index("email", unique=True)
+    # Assignments used to be keyed by email under a unique index. New records
+    # carry no email, so that index would reject every record after the first
+    # (a unique index treats a missing field as null). Drop it if present.
+    if "email_1" in coll.index_information():
+        coll.drop_index("email_1")
+    coll.create_index("participant_id", unique=True)
     return coll
 
 
@@ -61,17 +67,16 @@ def _record_to_result(record):
         "question_order": record["problem_at_position"],
         "variant_assignments": record["variant_assignments"],
         "sequence_label": record["sequence_label"],
-        # Stable, non-PII id for joining trial logs to a participant without
-        # keying on email — trial_logs should never need to carry raw email.
         "participant_id": record["participant_id"],
     }
 
 
-def get_or_create_assignment(email, questions):
+def get_or_create_assignment(participant_id, questions):
     """
     Return this participant's realized assignment, creating and persisting
-    one only if none exists yet for their email. Never reassigns an email
-    that already has a persisted assignment — this is the "resume" path.
+    one only if none exists yet for their participant_id. Never reassigns a
+    participant who already has a persisted assignment — this is the
+    "resume" path.
 
     Returns
     -------
@@ -79,7 +84,7 @@ def get_or_create_assignment(email, questions):
     """
     coll = _assignments_collection()
 
-    existing = coll.find_one({"email": email})
+    existing = coll.find_one({"participant_id": participant_id})
     if existing is not None:
         return _record_to_result(existing)
 
@@ -89,8 +94,7 @@ def get_or_create_assignment(email, questions):
     )
 
     record = {
-        "email": email,
-        "participant_id": str(uuid.uuid4()),
+        "participant_id": participant_id,
         "sequence_label": seq_label,
         "type_at_position": list(SEQUENCES[seq_index]),
         "problem_at_position": question_order,
@@ -103,9 +107,9 @@ def get_or_create_assignment(email, questions):
     try:
         coll.insert_one(record)
     except DuplicateKeyError:
-        # Lost a race against a concurrent first-visit for the same email;
-        # the winner's assignment is authoritative — use it, discard ours.
-        existing = coll.find_one({"email": email})
+        # Lost a race against a concurrent first-visit for the same
+        # participant; the winner's assignment is authoritative — use it.
+        existing = coll.find_one({"participant_id": participant_id})
         return _record_to_result(existing)
 
     return _record_to_result(record)

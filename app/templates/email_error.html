@@ -2,12 +2,13 @@
 <div class="container">
 	<h1>Welcome to the Programming Quiz</h1>
 	<p class="center">
-		The email provided is not a correct UF email. Please use the button
-		below to return to the homepage.
+		The email provided is not valid for this study. Please use your
+		university email address
+		({% for d in domains %}@{{ d }}{% if not loop.last %} or {% endif %}{% endfor %}).
 	</p>
 
 	<div class="center">
-		<a href="{{ url_for('main.index') }}" class="btn btn-accept">Home</a>
+		<a href="{{ url_for('main.index') }}" class="btn btn-accept">Back</a>
 	</div>
 </div>
 {% endblock %}

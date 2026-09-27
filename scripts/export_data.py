@@ -11,7 +11,7 @@ Usage
 Output files (written to exports/ by default)
 ----------------------------------------------
 participants.csv  — one row per participant
-    Columns: participant_id, sequence, timestamp,
+    Columns: participant_id, site, sequence, timestamp,
              six pre-survey scale means, four final-survey scale means,
              total_duration_s
 
@@ -29,8 +29,10 @@ aggregates.json   — sample-level metrics from docs/MEASURES.md §8, with
 
 Privacy
 -------
-Identifying fields (email, firstName, lastName, uf_id) are excluded from
-all outputs. Participants are numbered 1, 2, 3 … in order of study
+Research records carry no email: it is stored only in the separate
+`participants` collection (app/utils/participants.py), which this script
+never reads. Identifying fields found on legacy records (email, firstName,
+lastName, uf_id, classSchool) are excluded at the query level. Participants are numbered 1, 2, 3 … in order of study
 completion (sorted by timestamp); the participant_id column is the study's
 internal UUID (app/utils/assignment.py), never the numbering or the email.
 
@@ -180,6 +182,7 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
     row: dict = {
         "participant_id": participant_id,
         "participant_uuid": doc.get("participant_id", ""),
+        "site": doc.get("site", ""),
         "sequence": doc.get("sequence_label", ""),
         "timestamp": str(doc.get("timestamp", "")),
     }
@@ -371,7 +374,7 @@ def compute_aggregates(all_trial_rows: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 PARTICIPANT_FIELDS = (
-    ["participant_id", "participant_uuid", "sequence", "timestamp"]
+    ["participant_id", "participant_uuid", "site", "sequence", "timestamp"]
     + [f"pre_{s}_mean" for s in PRE_SURVEY_SCALES]
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
     + ["total_duration_s"]
@@ -440,7 +443,7 @@ def main() -> None:
     collection = init_db()
 
     # Exclude identifying fields at the query level, sort by completion time.
-    projection = {"email": 0, "firstName": 0, "lastName": 0, "uf_id": 0}
+    projection = {"email": 0, "firstName": 0, "lastName": 0, "uf_id": 0, "classSchool": 0}
     docs = list(collection.find({}, projection).sort("timestamp", 1))
     print(f"Found {len(docs)} record(s).", file=sys.stderr)
 

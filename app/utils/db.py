@@ -51,100 +51,47 @@ def get_participant_count():
     return users_collection.count_documents({})
 
 
-def find_user(user_email):
-
-    users_collection = init_db()
-    users = users_collection.find()
-
-    for user in users:
-        # Assign email
-        email = user.get("email")
-
-        # Compare email
-        if email == user_email:
-            return True
-  
-    return False
-
-def insert_user(user_email):
-    users_collection = init_db()
-
-    # Check if user already exists
-    if find_user(user_email):
-        print("User already exists!")
-        return (-1)
-    
-    # Assign email otherwise
-    email = user_email
-
-    data = {
-        "email": email
-    }
-
-    # Insert a new user into the database
-    result = users_collection.insert_one(data)
-    print("User successfully added!")
-    return result.inserted_id
-
-def update_user(user_email, updated_data):
-    users_collection = init_db()
-    # Update user data by email
-    return users_collection.update_one({"_id": user_email}, {"$set": updated_data})
-
-def delete_user(user_email):
-    users_collection = init_db()
-    # Delete a user by email
-    return users_collection.delete_one({"_id": user_email})
-
 def insert_user_response(responses):
-
-    _id = insert_user(responses["email"])
-
-    # Check if user already exist in db
-    if (_id == -1):
-        print("User already exist!")
-        return
-
-    # responses["uf_id"]
-    # responses["question_order"]
-    # responses["answers"]
-    # responses["post_survey_answers"]
-    # responses["final_survey_answers"]
-    # responses["chat_history"]
-
+    """
+    Write one participant's research record, keyed by participant_id.
+    Carries no email or other identifying fields — email lives only in the
+    `participants` collection (app.utils.participants). A repeat submit for
+    the same participant_id is a no-op, so the first write wins.
+    """
     users_collection = init_db()
-    from bson.objectid import ObjectId
-   
+    # Partial index: legacy records written before participant_id existed
+    # lack the field and must not collide with each other as nulls.
+    users_collection.create_index(
+        "participant_id",
+        unique=True,
+        partialFilterExpression={"participant_id": {"$type": "string"}},
+    )
 
-    query = {"_id": _id}
-
-    update = {
-        "$set": {
-            "uf_id": responses["uf_id"],
-            "participant_id": responses.get("participant_id"),
-            "sequence_label": responses["sequence_label"],
-            "question_order": responses["question_order"],
-            "variant_assignments": responses["variant_assignments"],
-            "answers": responses["answers"],
-            "pre_survey_answers": responses["pre_survey_answers"],
-            "post_survey_answers": responses["post_survey_answers"],
-            "final_survey_answers": responses["final_survey_answers"],
-            "chat_history": responses["chat_history"],
-            "chat_transcript": responses.get("chat_transcript"),
-            "firstName" : responses["firstName"],
-            "lastName" : responses["lastName"],
-            "classSchool" : responses["classSchool"],
-            "demographics" : responses["demographics"],
-            "timestamp" : datetime.datetime.now(),
-            "times" : responses["times"],
-        }
+    record = {
+        "participant_id": responses["participant_id"],
+        "site": responses["site"],
+        "sequence_label": responses["sequence_label"],
+        "question_order": responses["question_order"],
+        "variant_assignments": responses["variant_assignments"],
+        "answers": responses["answers"],
+        "pre_survey_answers": responses["pre_survey_answers"],
+        "post_survey_answers": responses["post_survey_answers"],
+        "final_survey_answers": responses["final_survey_answers"],
+        "chat_history": responses["chat_history"],
+        "chat_transcript": responses.get("chat_transcript"),
+        "demographics": responses["demographics"],
+        "timestamp": datetime.datetime.now(),
+        "times": responses["times"],
     }
-    result = users_collection.update_one(query, update)
-
-    if result:
-        print("success!")
+    result = users_collection.update_one(
+        {"participant_id": record["participant_id"]},
+        {"$setOnInsert": record},
+        upsert=True,
+    )
+    if result.upserted_id is None:
+        print("Response already recorded for this participant.")
     else:
-        print("failed!")
+        print("success!")
 
 
 # Add more functions as needed
