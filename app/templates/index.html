@@ -1,36 +1,15 @@
 {% extends "base.html" %} {% block content %}
 <div class="container">
 	<h1>Welcome to the Programming Quiz</h1>
-	<p class="center">Test your knowledge with these programming questions!</p>
 
-	<form
-		action="{{ url_for('main.validate_email') }}"
-		method="post"
-		class="demographics-form"
-	>
-		<div class="form-section">
-			<div class="basic-info">
-				<div class="form-row">
-					<div class="form-field">
-						<label for="email">Email</label>
-						<input
-							type="email"
-							id="email"
-							name="email"
-							placeholder="Enter your email"
-							required
-						/>
-					</div>
-				</div>
-			</div>
-		</div>
-		<div class="center">
-			<button type="submit" class="btn btn-accept">Start Quiz</button>
-		</div>
-	</form>
-	
 	<div class="research-note">
-		<p>This research study is conducted by Ebrar Karadeniz in the Social Computing Group at the Department of Informatics, University of Zurich, under the supervision of Dr. Nicolò Pagan. If you have any questions, concerns, or technical issues while using this platform, please contact ebrarsevval.karadeniz@uzh.ch.</p>
+		<p>{{ site.research_note }}</p>
+	</div>
+
+	<div class="center">
+		<a href="{{ url_for('main.collect_consent') }}" class="btn btn-accept"
+			>Start</a
+		>
 	</div>
 </div>
 {% endblock %}

@@ -70,6 +70,8 @@ def insert_user_response(responses):
     record = {
         "participant_id": responses["participant_id"],
         "site": responses["site"],
+        "prior_participation": responses.get("prior_participation"),
+        "participated_before": responses.get("participated_before"),
         "sequence_label": responses["sequence_label"],
         "question_order": responses["question_order"],
         "variant_assignments": responses["variant_assignments"],

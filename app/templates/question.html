@@ -105,7 +105,21 @@
 </div>
 
 <script>
-  let recommendationReceived = false;
+  // True when the server already served this trial's recommendation, e.g.
+  // after a reload. The exchange is in the restored history, so the page
+  // starts unlocked instead of asking for it again.
+  let recommendationReceived = {{ 'true' if recommendation_shown else 'false' }};
+
+  function unlockAfterRecommendation() {
+    recommendationReceived = true;
+    document.getElementById("get-recommendation").disabled = true;
+    document.getElementById("user-message").disabled = false;
+    document.getElementById("send-message").disabled = false;
+
+    const radioInputs = document.querySelectorAll('input[type="radio"]');
+    radioInputs.forEach((input) => (input.disabled = false));
+    document.getElementById("submit-answer").disabled = false;
+  }
 
   // --- Trial instrumentation: first interaction, answer revisions -----------
   let firstInteractionAt = null;
@@ -148,6 +162,7 @@
   // Render any Markdown carried over from earlier turns, then scroll.
   window.onload = () => {
     renderRestoredHistory();
+    if (recommendationReceived) unlockAfterRecommendation();
     scrollToBottom();
   };
 
@@ -292,15 +307,8 @@
 
         await addMessageWithTyping(data.recommendation, false);
 
-        recommendationReceived = true;
-        document.getElementById("get-recommendation").disabled = true;
-        document.getElementById("user-message").disabled = false;
-        document.getElementById("send-message").disabled = false;
+        unlockAfterRecommendation();
         document.getElementById("user-message").focus();
-
-        const radioInputs = document.querySelectorAll('input[type="radio"]');
-        radioInputs.forEach((input) => (input.disabled = false));
-        document.getElementById("submit-answer").disabled = false;
       } catch (error) {
         console.error("Error:", error);
       }

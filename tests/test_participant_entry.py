@@ -1,6 +1,6 @@
 """
-Tests for email-based entry, site detection, and participant identity
-(app/routes.py index/validate_email/consent/final_survey,
+Tests for site entry links, the first-participation question on the consent
+page, and the browser-cookie repeat check (app/routes.py start/consent/final_survey,
 app/utils/participants.py, app/utils/sites.py).
 
 MongoDB is replaced by a small in-memory fake that supports only the
@@ -17,6 +17,10 @@ from flask import Flask
 from pymongo.errors import DuplicateKeyError
 
 from app.routes import main_bp
+from app.utils.participants import PARTICIPANT_COOKIE, PRIOR_PARTICIPATION_OPTIONS
+
+
+_MISSING = object()
 
 
 class FakeCollection:
@@ -24,12 +28,20 @@ class FakeCollection:
         self.docs = []
         self.unique = {}  # index name -> field
 
-    def _matches(self, doc, query):
-        return all(doc.get(k) == v for k, v in query.items())
+    @staticmethod
+    def _get(doc, dotted):
+        for part in dotted.split("."):
+            if not isinstance(doc, dict) or part not in doc:
+                return _MISSING
+            doc = doc[part]
+        return doc
 
-    def create_index(self, field, unique=False, partialFilterExpression=None):
+    def _matches(self, doc, query):
+        return all(self._get(doc, k) == v for k, v in query.items())
+
+    def create_index(self, field, unique=False, name=None, partialFilterExpression=None):
         if unique:
-            self.unique[f"{field}_1"] = field
+            self.unique[name or f"{field}_1"] = field
 
     def index_information(self):
         return {name: {} for name in self.unique}
@@ -39,7 +51,8 @@ class FakeCollection:
 
     def _check_unique(self, doc):
         for field in self.unique.values():
-            if field in doc and any(d.get(field) == doc[field] for d in self.docs):
+            value = self._get(doc, field)
+            if value is not _MISSING and any(self._get(d, field) == value for d in self.docs):
                 raise DuplicateKeyError(f"dup {field}")
 
     def find_one(self, query):
@@ -100,9 +113,22 @@ def client(db):
     return app.test_client()
 
 
-def _enter(client, email):
-    client.get("/")
-    return client.post("/validate_email", data={"email": email})
+UF_FORM = {
+    "email": "  Gator@UFL.edu ",
+    "id_number": "12345678",
+    "firstName": "Alex",
+    "lastName": "Gator",
+    "classSchool": "COP3502",
+}
+
+
+def _enter(client, site="uzh", prior="no", form=None):
+    client.get(f"/start/{site}")
+    if site == "uf":
+        resp = client.post("/validate_email", data=form or UF_FORM)
+        if not resp.headers["Location"].endswith("/consent"):
+            return resp
+    return client.post("/consent", data={"consent": "on", "prior_participation": prior})
 
 
 def _finish(client):
@@ -111,104 +137,278 @@ def _finish(client):
     return client.post("/final_survey", data={})
 
 
-def test_entry_form_asks_only_for_email(client):
-    html = client.get("/").get_data(as_text=True)
-    assert 'name="email"' in html
-    assert "@uzh.ch" in html and "@ncsu.edu" in html
-    for removed in ("id_number", "firstName", "lastName", "classSchool"):
-        assert removed not in html
+def _new_browser(client):
+    """Same person, fresh browser state: no participant cookie, no session."""
+    client.delete_cookie(PARTICIPANT_COOKIE)
+    client.delete_cookie("session")
 
 
-@pytest.mark.parametrize(
-    "email,site",
-    [
-        ("  Student@UZH.ch ", "uzh"),
-        ("someone@ifi.uzh.ch", "uzh"),
-        ("wolf@NCSU.edu", "ncsu"),
-    ],
-)
-def test_site_is_derived_from_email_domain(client, db, email, site):
-    resp = _enter(client, email)
-    assert resp.headers["Location"].endswith("/consent")
-
-    (record,) = db["participants"].docs
-    assert record["email"] == email.strip().lower()
-    assert record["site"] == site
-    with client.session_transaction() as sess:
-        assert sess["participant_id"] == record["participant_id"]
-        assert sess["site"] == site
+IDENTITY_FIELDS = ('name="email"', 'name="id_number"', 'name="firstName"',
+                   'name="lastName"', 'name="classSchool"')
 
 
-@pytest.mark.parametrize(
-    "email", ["x@gmail.com", "x@evil-uzh.ch", "x@uzh.ch.example.com", "not-an-email", ""]
-)
-def test_other_domains_are_rejected(client, db, email):
-    assert _enter(client, email).headers["Location"].endswith("/email_error")
+def test_uzh_start_page_asks_no_personal_data(client):
+    html = client.get("/start/uzh").get_data(as_text=True)
+    for field in IDENTITY_FIELDS + ('name="prior_participation"',):
+        assert field not in html
+
+
+def test_uf_start_page_is_the_main_branch_form(client):
+    html = client.get("/start/uf").get_data(as_text=True)
+    for field in IDENTITY_FIELDS:
+        assert field in html
+    assert "UFID" in html
+    assert "IRB Protocol #ET00044243" in html
+
+
+def test_site_specific_study_information(client):
+    assert "University of Zurich" in client.get("/start/uzh").get_data(as_text=True)
+    assert "University of Zurich" not in client.get("/start/uf").get_data(as_text=True)
+
+
+def test_unknown_site_and_bare_root_do_not_start_the_study(client, db):
+    assert client.get("/start/elsewhere").status_code == 404
+    assert "link you received" in client.get("/").get_data(as_text=True)
+    resp = client.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    assert resp.headers["Location"].endswith("/")
     assert not db.get("participants") or not db["participants"].docs
 
 
-def test_consent_shows_site_specific_study_information(client):
-    _enter(client, "p@uzh.ch")
-    assert "University of Zurich" in client.get("/consent").get_data(as_text=True)
-
-    _enter(client, "p@ncsu.edu")
-    html = client.get("/consent").get_data(as_text=True)
-    assert "University of Zurich" not in html
-    assert "NCSU" in html
-
-
-def test_consent_requires_an_entered_email(client):
-    client.get("/")
-    assert client.get("/consent").headers["Location"].endswith("/")
+def test_question_is_on_every_consent_page(client):
+    for site in ("uzh", "uf"):
+        client.get(f"/start/{site}")
+        if site == "uf":
+            client.post("/validate_email", data=UF_FORM)
+        html = client.get("/consent").get_data(as_text=True)
+        assert 'name="prior_participation"' in html
+        for label in PRIOR_PARTICIPATION_OPTIONS.values():
+            assert label in html
 
 
-def test_email_is_kept_out_of_research_collections(client, db):
-    _enter(client, "p@uzh.ch")
+def test_nothing_is_stored_before_consent(client, db):
+    client.get("/start/uzh")
+    client.get("/consent")
+    assert client.get_cookie(PARTICIPANT_COOKIE) is None
+    assert not db.get("participants") or not db["participants"].docs
+
+
+def test_declining_stores_nothing(client, db):
+    client.get("/start/uzh")
+    resp = client.post("/consent", data={"prior_participation": "no"})
+    assert resp.headers["Location"].endswith("/declined")
+    assert not db.get("participants") or not db["participants"].docs
+    assert not db.get("sequence_counts")
+
+
+def test_prior_participation_answer_is_required(client, db):
+    client.get("/start/uzh")
+    resp = client.post("/consent", data={"consent": "on"})
+    assert resp.status_code == 400
+    assert not db.get("participants") or not db["participants"].docs
+
+
+@pytest.mark.parametrize(
+    "prior,flag", [("no", False), ("started", True), ("completed", True)]
+)
+def test_every_answer_continues_and_is_recorded(client, db, prior, flag):
+    resp = _enter(client, "uf", prior)
+    assert resp.headers["Location"].endswith("/demographics")
+
+    (record,) = db["participants"].docs
+    assert record["site"] == "uf"
+    assert record["prior_participation"] == prior
+    assert record["participated_before"] is flag
+    assert client.get_cookie(PARTICIPANT_COOKIE).value == record["participant_id"]
+
     _finish(client)
-
-    (assignment,) = db["participant_assignments"].docs
     (response,) = db["users"].docs
-    for doc in (assignment, response):
-        assert "email" not in doc
-        assert "p@uzh.ch" not in repr(doc)
-    assert response["site"] == "uzh"
-    assert response["participant_id"] == db["participants"].docs[0]["participant_id"]
+    assert response["prior_participation"] == prior
+    assert response["participated_before"] is flag
+    assert response["site"] == "uf"
+    assert response["participant_id"] == record["participant_id"]
 
 
-def test_returning_unfinished_email_resumes_same_assignment(client, db):
-    _enter(client, "p@uzh.ch")
+def test_no_personal_data_is_stored_for_uzh(client, db):
+    _enter(client)
+    _finish(client)
+    for name in ("participants", "participant_assignments", "users"):
+        for doc in db[name].docs:
+            for field in ("email", "firstName", "lastName", "uf_id", "classSchool"):
+                assert field not in doc
+
+
+def test_same_browser_resumes_where_it_left_off(client, db):
+    _enter(client)
+    client.post("/demographics", data={"age": "18-24"})
+    with client.session_transaction() as sess:
+        first = (sess["participant_id"], sess["question_order"])
+
+    resp = client.get("/start/uzh")
+    assert resp.headers["Location"].endswith("/pre_survey")
+    with client.session_transaction() as sess:
+        assert (sess["participant_id"], sess["question_order"]) == first
+    assert len(db["participants"].docs) == 1
+
+
+def test_expired_session_keeps_participant_and_assignment(client, db):
+    _enter(client, prior="started")
     with client.session_transaction() as sess:
         first = (sess["participant_id"], sess["question_order"], sess["sequence_label"])
+    client.delete_cookie("session")  # session lost, participant cookie kept
 
-    _enter(client, " P@UZH.CH")
+    resp = client.get("/start/uzh")
+    assert resp.headers["Location"].endswith("/demographics")
     with client.session_transaction() as sess:
-        again = (sess["participant_id"], sess["question_order"], sess["sequence_label"])
-
-    assert again == first
+        assert (sess["participant_id"], sess["question_order"], sess["sequence_label"]) == first
+        assert sess["prior_participation"] == "started"
     assert len(db["participants"].docs) == 1
     assert len(db["participant_assignments"].docs) == 1
 
 
-def test_completed_email_cannot_start_again(client, db):
-    _enter(client, "p@uzh.ch")
+def test_completed_browser_is_turned_away(client, db):
+    _enter(client)
     _finish(client)
     assert db["participants"].docs[0]["completed_at"] is not None
 
-    resp = _enter(client, "P@uzh.ch ")
-    assert resp.headers["Location"].endswith("/thank_you")
-    assert len(db["users"].docs) == 1
+    for url in ("/start/uzh", "/start/uf"):
+        html = client.get(url).get_data(as_text=True)
+        assert "already been completed" in html
+    assert len(db["participants"].docs) == 1
+
+
+def test_new_browser_gets_a_new_participant(client, db):
+    _enter(client)
+    _finish(client)
+    _new_browser(client)
+    assert _enter(client, prior="completed").headers["Location"].endswith("/demographics")
+    assert len(db["participants"].docs) == 2
 
 
 def test_resubmitting_final_survey_does_not_duplicate_response(client, db):
-    _enter(client, "p@uzh.ch")
+    _enter(client)
     _finish(client)
     _finish(client)
     assert len(db["users"].docs) == 1
 
 
-def test_legacy_email_index_on_assignments_is_dropped(client, db):
-    legacy = db.setdefault("participant_assignments", FakeCollection())
-    legacy.create_index("email", unique=True)
-    _enter(client, "a@uzh.ch")
-    _enter(client, "b@uzh.ch")
-    assert len(legacy.docs) == 2
+def test_back_to_consent_after_agreeing_does_not_create_second_participant(client, db):
+    _enter(client)
+    assert client.get("/consent").status_code == 302
+    client.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    assert len(db["participants"].docs) == 1
+
+
+def test_legacy_unique_email_indexes_are_dropped(client, db):
+    for name in ("participants", "participant_assignments"):
+        db.setdefault(name, FakeCollection()).create_index("email", unique=True)
+    _enter(client)
+    _new_browser(client)
+    _enter(client)
+    assert len(db["participants"].docs) == 2
+    assert len(db["participant_assignments"].docs) == 2
+
+
+def test_each_site_gets_its_own_consent_page(client):
+    client.get("/start/uzh")
+    uzh = client.get("/consent").get_data(as_text=True)
+    assert "Informed Consent" in uzh
+    assert "SONA" not in uzh
+
+    client.get("/start/uf")
+    client.post("/validate_email", data=UF_FORM)
+    uf = client.get("/consent").get_data(as_text=True)
+    assert "Informed Consent" in uf
+    assert "SONA" in uf
+
+
+def test_unconsented_session_with_participant_does_not_loop(client, db):
+    """Sessions from the earlier flow created the participant before consent."""
+    client.get("/start/uzh")
+    with client.session_transaction() as sess:
+        sess["participant_id"] = "legacy-id"
+
+    resp = client.get("/consent")
+    assert resp.status_code == 200
+    assert 'name="prior_participation"' in resp.get_data(as_text=True)
+
+    resp = client.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    assert resp.headers["Location"].endswith("/demographics")
+    assert client.get("/start/uzh").headers["Location"].endswith("/demographics")
+
+
+# --- UF: start-page identity form -------------------------------------------
+
+
+def test_uf_identity_is_stored_only_in_participants(client, db):
+    _enter(client, "uf")
+    _finish(client)
+
+    (record,) = db["participants"].docs
+    assert record["identity"] == {
+        "email": "gator@ufl.edu",
+        "uf_id": "12345678",
+        "firstName": "Alex",
+        "lastName": "Gator",
+        "classSchool": "COP3502",
+    }
+    for name in ("participant_assignments", "users"):
+        for doc in db[name].docs:
+            assert "identity" not in doc
+            assert "gator@ufl.edu" not in repr(doc)
+            assert "Alex" not in repr(doc)
+    with client.session_transaction() as sess:
+        assert "identity" not in sess
+
+
+def test_uf_identity_is_not_stored_before_consent(client, db):
+    client.get("/start/uf")
+    client.post("/validate_email", data=UF_FORM)
+    assert not db.get("participants") or not db["participants"].docs
+    resp = client.post("/consent", data={"prior_participation": "no"})  # decline
+    assert resp.headers["Location"].endswith("/declined")
+    assert not db.get("participants") or not db["participants"].docs
+
+
+def test_uf_consent_requires_the_start_form(client):
+    client.get("/start/uf")
+    assert client.get("/consent").headers["Location"].endswith("/start/uf")
+
+
+@pytest.mark.parametrize("email", ["x@gmail.com", "x@evil-ufl.edu", "not-an-email", ""])
+def test_uf_rejects_non_ufl_emails(client, db, email):
+    resp = _enter(client, "uf", form={**UF_FORM, "email": email})
+    assert resp.headers["Location"].endswith("/email_error")
+    assert "not a correct UF email" in client.get("/email_error").get_data(as_text=True)
+
+
+def test_uf_completed_email_is_turned_away_in_any_browser(client, db):
+    _enter(client, "uf")
+    _finish(client)
+    _new_browser(client)
+
+    resp = _enter(client, "uf", form={**UF_FORM, "email": "GATOR@ufl.edu"})
+    assert resp.headers["Location"].endswith("/thank_you")
+    assert len(db["participants"].docs) == 1
+
+
+def test_uf_unfinished_email_resumes_in_another_browser(client, db):
+    _enter(client, "uf", prior="started")
+    with client.session_transaction() as sess:
+        first = (sess["participant_id"], sess["question_order"], sess["sequence_label"])
+    _new_browser(client)
+
+    resp = _enter(client, "uf", form={**UF_FORM, "email": "gator@ufl.edu "})
+    assert resp.headers["Location"].endswith("/demographics")
+    with client.session_transaction() as sess:
+        assert (sess["participant_id"], sess["question_order"], sess["sequence_label"]) == first
+        assert sess["prior_participation"] == "started"
+    assert client.get_cookie(PARTICIPANT_COOKIE).value == first[0]
+    assert len(db["participants"].docs) == 1
+
+
+def test_uzh_records_do_not_collide_on_missing_email(client, db):
+    for _ in range(3):
+        _enter(client)
+        _new_browser(client)
+    _enter(client, "uf")
+    assert len(db["participants"].docs) == 4

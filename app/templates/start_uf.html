@@ -1,0 +1,84 @@
+{% extends "base.html" %} {% block content %}
+{# UF start page: the entry form from the main branch. The details are held
+   in the session and stored (participants collection only) on consent. #}
+<div class="container">
+	<h1>Welcome to the Programming Quiz</h1>
+	<p class="center">Test your knowledge with these programming questions!</p>
+
+	<form
+		action="{{ url_for('main.validate_email') }}"
+		method="post"
+		class="demographics-form"
+	>
+		<div class="form-section">
+			<div class="basic-info">
+				<div class="form-row">
+					<div class="form-field">
+						<label>Email</label>
+						<input
+							type="email"
+							id="email"
+							name="email"
+							placeholder="Enter your email"
+							required
+						/>
+					</div>
+					<div class="form-field">
+						<label>UFID (optional)</label>
+						<input
+							type="text"
+							id="id_number"
+							maxlength="8"
+							pattern="[0-9]{8}"
+							name="id_number"
+							placeholder="Enter your UFID"
+						/>
+					</div>
+				</div>
+				<div class="form-row">
+					<div class="form-field">
+						<label>First Name</label>
+						<input
+							type="text"
+							id="firstName"
+							name="firstName"
+							placeholder="First Name"
+							required
+						/>
+					</div>
+					<div class="form-field">
+						<label>Last Name</label>
+						<input
+							type="text"
+							id="lastName"
+							name="lastName"
+							placeholder="Last Name"
+							required
+						/>
+					</div>
+				</div>
+				<div class="form-row">
+					<div class="form-field">
+						<label>Class</label>
+						<input
+							type="text"
+							id="classSchool"
+							name="classSchool"
+							placeholder="Enter your Class"
+							required
+						/>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="center">
+			<button type="submit" class="btn btn-accept">Start Quiz</button>
+		</div>
+	</form>
+	
+	<div class="research-note">
+		<p>{{ site.research_note }}</p>
+	</div>
+	
+</div>
+{% endblock %}

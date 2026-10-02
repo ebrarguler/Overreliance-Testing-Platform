@@ -11,7 +11,8 @@ Usage
 Output files (written to exports/ by default)
 ----------------------------------------------
 participants.csv  — one row per participant
-    Columns: participant_id, site, sequence, timestamp,
+    Columns: participant_id, site, prior_participation, participated_before,
+             sequence, timestamp,
              six pre-survey scale means, four final-survey scale means,
              total_duration_s
 
@@ -29,10 +30,9 @@ aggregates.json   — sample-level metrics from docs/MEASURES.md §8, with
 
 Privacy
 -------
-Research records carry no email: it is stored only in the separate
-`participants` collection (app/utils/participants.py), which this script
-never reads. Identifying fields found on legacy records (email, firstName,
-lastName, uf_id, classSchool) are excluded at the query level. Participants are numbered 1, 2, 3 … in order of study
+The study collects no email or name. Identifying fields found on legacy
+records (email, firstName, lastName, uf_id, classSchool) are excluded at the
+query level. Participants are numbered 1, 2, 3 … in order of study
 completion (sorted by timestamp); the participant_id column is the study's
 internal UUID (app/utils/assignment.py), never the numbering or the email.
 
@@ -183,6 +183,8 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
         "participant_id": participant_id,
         "participant_uuid": doc.get("participant_id", ""),
         "site": doc.get("site", ""),
+        "prior_participation": doc.get("prior_participation", ""),
+        "participated_before": doc.get("participated_before", ""),
         "sequence": doc.get("sequence_label", ""),
         "timestamp": str(doc.get("timestamp", "")),
     }
@@ -374,7 +376,7 @@ def compute_aggregates(all_trial_rows: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 PARTICIPANT_FIELDS = (
-    ["participant_id", "participant_uuid", "site", "sequence", "timestamp"]
+    ["participant_id", "participant_uuid", "site", "prior_participation", "participated_before", "sequence", "timestamp"]
     + [f"pre_{s}_mean" for s in PRE_SURVEY_SCALES]
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
     + ["total_duration_s"]

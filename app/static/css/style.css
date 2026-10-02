@@ -578,3 +578,20 @@ h2 {
 .survey-btn-secondary:hover {
 	background: #7f8c8d;
 }
+
+.prior-participation {
+	border: none;
+	padding: 0;
+	margin: 0 0 10px;
+}
+
+.prior-participation legend {
+	font-weight: 500;
+	color: #2c3e50;
+	margin-bottom: 12px;
+}
+
+.form-error {
+	color: #c0392b;
+	font-size: 0.9em;
+}

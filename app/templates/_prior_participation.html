@@ -1,0 +1,26 @@
+{# First-participation question, included by every site's consent page.
+   Submitted with "I Agree" and stored only on consent. #}
+<div class="info-block">
+	<fieldset class="prior-participation">
+		<legend>
+			Have you previously started or completed this study, including a
+			pilot version?
+		</legend>
+		{% for value, label in prior_options.items() %}
+		<div class="option">
+			<input
+				type="radio"
+				id="prior_{{ value }}"
+				name="prior_participation"
+				value="{{ value }}"
+				required
+			/>
+			<label for="prior_{{ value }}">{{ label }}</label>
+		</div>
+		{% endfor %}
+		{% if error %}
+		<p class="form-error">{{ error }}</p>
+		{% endif %}
+	</fieldset>
+</div>
+

@@ -13,15 +13,23 @@ from flask import (
     url_for,
     jsonify,
     flash,
+    make_response,
 )
 from .utils.db import insert_user_response
 from .utils.participants import (
+    PARTICIPANT_COOKIE,
+    PARTICIPANT_COOKIE_MAX_AGE,
+    PRIOR_PARTICIPATION_OPTIONS,
+    create_participant,
+    participated_before,
     normalize_email,
     is_valid_email,
-    get_or_create_participant,
+    email_matches_domain,
+    find_participant_by_email,
+    get_participant,
     mark_completed,
 )
-from .utils.sites import get_site, site_for_email, allowed_email_domains
+from .utils.sites import get_site
 from .utils.assignment import get_or_create_assignment
 from .utils.trial_types import is_misleading
 from .utils.chat_prompting import build_system_message
@@ -64,15 +72,10 @@ OPENAI_MAX_COMPLETION_TOKENS = int(os.getenv("OPENAI_MAX_COMPLETION_TOKENS", "51
 # logging.basicConfig(level=logging.DEBUG)
 
 
-@main_bp.route("/")
-def index():
+def _reset_session(site_key):
     session.clear()
-
-    # Participant identity, site, and sequence assignment are all settled
-    # once the email is known, in validate_email() below — see
-    # app.utils.participants, app.utils.sites and app.utils.assignment. A
-    # returning email resumes its existing assignment rather than being
-    # reassigned.
+    session["site"] = site_key
+    session["participant_id"] = None
     session["pre_survey_data"] = {}
     session["question_index"] = 0
     session["answers"] = []
@@ -80,8 +83,6 @@ def index():
     session["final_survey_answers"] = []
     session["chat_history"] = []
     session["chat_transcript"] = []
-    session["participant_id"] = None
-    session["site"] = None
     session["demographics"] = []
     session["times"] = []
     session["begin"] = 0
@@ -89,24 +90,165 @@ def index():
     session["end_time"] = 0
     session["start_time"] = 0
 
-    return render_template("index.html", domains=allowed_email_domains())
+
+def _load_assignment(participant_id):
+    assignment = get_or_create_assignment(participant_id, questions)
+    session["question_order"] = assignment["question_order"]
+    session["variant_assignments"] = assignment["variant_assignments"]
+    session["sequence_label"] = assignment["sequence_label"]
+
+
+def _attach_participant(participant, next_url):
+    """
+    Put a consented participant into the session and return a redirect to
+    next_url that (re)sets their browser cookie.
+    """
+    session["participant_id"] = participant["participant_id"]
+    session["prior_participation"] = participant["prior_participation"]
+    session["consented"] = True
+    _load_assignment(participant["participant_id"])
+
+    response = make_response(redirect(next_url))
+    response.set_cookie(
+        PARTICIPANT_COOKIE,
+        participant["participant_id"],
+        max_age=PARTICIPANT_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="Lax",
+        secure=request.is_secure,
+    )
+    return response
+
+
+def _resume_url():
+    """Where an in-progress participant left off, from their session state."""
+    if not session.get("consented"):
+        return url_for("main.collect_consent")
+    if not session.get("demographics"):
+        return url_for("main.collect_demographics")
+    missing_page = first_incomplete_page(session.get("pre_survey_data") or {})
+    if missing_page is not None:
+        return url_for("main.pre_survey", page=missing_page)
+    if session.get("question_index", 0) < len(session.get("question_order", [])):
+        return url_for("main.quiz")
+    return url_for("main.final_survey")
+
+
+@main_bp.route("/")
+def index():
+    # There is no site-neutral entry: participants arrive through their
+    # site's link. Mid-study "home" links land back on it.
+    site_key = session.get("site")
+    if get_site(site_key):
+        return redirect(url_for("main.start", site_key=site_key))
+    return render_template("missing_link.html")
+
+
+@main_bp.route("/start/<site_key>")
+def start(site_key):
+    site_key = site_key.lower()
+    site = get_site(site_key)
+    if site is None:
+        return render_template("missing_link.html"), 404
+
+    # Browser check: this browser already has a participant.
+    participant = get_participant(request.cookies.get(PARTICIPANT_COOKIE))
+    if participant is not None:
+        if participant["completed_at"] is not None:
+            return render_template("already_completed.html")
+        if session.get("participant_id") == participant["participant_id"]:
+            # Session still holds their progress: continue where they were.
+            return redirect(_resume_url())
+        # Progress was lost (session expired). They already consented, so
+        # keep the participant_id and sequence assignment and restart the
+        # flow after consent.
+        _reset_session(participant["site"])
+        return _attach_participant(participant, url_for("main.collect_demographics"))
+
+    _reset_session(site_key)
+    return render_template(site["start_template"], site=site)
+
+
+@main_bp.route("/validate_email", methods=["POST"])
+def validate_email():
+    """UF start-page form. UZH has no form and never posts here."""
+    site_key = session.get("site")
+    site = get_site(site_key)
+    if site is None or not site["collects_identity"]:
+        return redirect(url_for("main.index"))
+
+    email = normalize_email(request.form.get("email"))
+    if not is_valid_email(email) or not email_matches_domain(email, site["email_domain"]):
+        return redirect(url_for("main.email_error"))
+
+    # Repeat check by email, whatever browser it comes from.
+    existing = find_participant_by_email(email)
+    if existing is not None:
+        if existing["completed_at"] is not None:
+            return redirect(url_for("main.thank_you"))
+        _reset_session(existing["site"])
+        return _attach_participant(existing, url_for("main.collect_demographics"))
+
+    # Held in the session only; written to the database on consent.
+    session["identity"] = {
+        "email": email,
+        "uf_id": (request.form.get("id_number") or "").strip() or None,
+        "firstName": (request.form.get("firstName") or "").strip(),
+        "lastName": (request.form.get("lastName") or "").strip(),
+        "classSchool": (request.form.get("classSchool") or "").strip(),
+    }
+    return redirect(url_for("main.collect_consent"))
+
 
 @main_bp.route("/email_error")
 def email_error():
-    return render_template("email_error.html", domains=allowed_email_domains())
+    return render_template("email_error.html")
+
+
+@main_bp.route("/declined")
+def declined():
+    return render_template("declined.html")
+
 
 @main_bp.route("/consent", methods=["GET", "POST"])
 def collect_consent():
-    site = get_site(session.get("site"))
+    site_key = session.get("site")
+    site = get_site(site_key)
     if site is None:
         return redirect(url_for("main.index"))
+    if session.get("consented"):
+        # Already consented in this session (e.g. Back button). Checking
+        # `consented`, not `participant_id`: _resume_url() sends unconsented
+        # sessions here, so keying on anything else can loop.
+        return redirect(_resume_url())
+    if site["collects_identity"] and not session.get("identity"):
+        # UF must fill in the start-page form first.
+        return redirect(url_for("main.start", site_key=site_key))
 
     if request.method == "POST":
-        if request.form.get("consent"):
-            session["consented"] = True
-            return redirect(url_for("main.collect_demographics"))
-        return redirect(url_for("main.index"))
-    return render_template("consent.html", site=site)
+        if not request.form.get("consent"):
+            return redirect(url_for("main.declined"))
+
+        prior = request.form.get("prior_participation")
+        if prior not in PRIOR_PARTICIPATION_OPTIONS:
+            return render_template(
+                site["consent_template"],
+                prior_options=PRIOR_PARTICIPATION_OPTIONS,
+                error="Please answer the question about previous participation.",
+            ), 400
+
+        # Nothing is stored until the participant consents. Every answer may
+        # continue; the self-report is stored so earlier participants can be
+        # excluded at analysis time. UF's start-page details move from the
+        # session into the participant record and are dropped from the session.
+        participant = create_participant(
+            site_key, prior, identity=session.pop("identity", None)
+        )
+        return _attach_participant(participant, url_for("main.collect_demographics"))
+
+    return render_template(
+        site["consent_template"], prior_options=PRIOR_PARTICIPATION_OPTIONS
+    )
 
 
 @main_bp.route("/demographics", methods=["GET", "POST"])
@@ -130,26 +272,12 @@ def collect_demographics():
     return render_template("demographics.html")
 
 
-@main_bp.route("/validate_email", methods=["POST"])
-def validate_email():
-    email = normalize_email(request.form.get("email"))
-    site_key = site_for_email(email) if is_valid_email(email) else None
-    if site_key is None:
-        return redirect(url_for("main.email_error"))
-
-    participant = get_or_create_participant(email, site_key)
-    if participant["completed_at"] is not None:
-        return redirect(url_for("main.thank_you"))
-
-    session["site"] = participant["site"]
-    session["participant_id"] = participant["participant_id"]
-
-    assignment = get_or_create_assignment(participant["participant_id"], questions)
-    session["question_order"] = assignment["question_order"]
-    session["variant_assignments"] = assignment["variant_assignments"]
-    session["sequence_label"] = assignment["sequence_label"]
-
-    return redirect(url_for("main.collect_consent"))
+def _initial_recommendation_entry(q_index):
+    """The transcript entry for this trial's initial recommendation, if shown."""
+    for entry in session.get("chat_transcript", []):
+        if entry["question_index"] == q_index and entry["is_initial_recommendation"]:
+            return entry
+    return None
 
 
 @main_bp.route("/quiz", methods=["GET", "POST"])
@@ -244,7 +372,14 @@ def quiz():
 
                 "timestamps": {
                     "served_at": session.get("trial_served_at"),
-                    "first_interaction_at": request.form.get("first_interaction_at") or None,
+                    # Answer options stay locked until the initial
+                    # recommendation is requested, so that request is the
+                    # first interaction. Its server timestamp covers a page
+                    # reload, which clears the client-side value.
+                    "first_interaction_at": (
+                        request.form.get("first_interaction_at")
+                        or (_initial_recommendation_entry(current_q_index) or {}).get("timestamp")
+                    ),
                     "first_submit_at": request.form.get("first_submit_at") or None,
                     "final_submit_at": final_submit_at,
                 },
@@ -304,6 +439,7 @@ def quiz():
             question_number=session["question_index"] + 1,
             total_questions=len(questions),
             chat_history=current_trial_history,
+            recommendation_shown=_initial_recommendation_entry(current_q_index) is not None,
             enable_confidence_rating=trial_confidence_rating_enabled(),
         )
     else:
@@ -320,6 +456,12 @@ def initial_recommendation():
     current_q_index = session["question_order"][session["question_index"]]
     variant = session["variant_assignments"][str(current_q_index)]
     recommendation = get_initial_recommendation(current_q_index, variant)
+
+    # Already shown this trial (e.g. the page was reloaded): return it again
+    # without logging a second exposure.
+    if _initial_recommendation_entry(current_q_index) is not None:
+        return jsonify(recommendation)
+
     user_message = "What's your recommended answer to this question?"
 
     session["chat_history"] = session.get("chat_history", [])
@@ -567,6 +709,10 @@ def final_survey():
         # Add each data element to the dictionary
         combined_data["participant_id"] = session.get("participant_id")
         combined_data["site"] = session.get("site")
+        combined_data["prior_participation"] = session.get("prior_participation")
+        combined_data["participated_before"] = participated_before(
+            session.get("prior_participation")
+        )
         combined_data["question_order"] = session.get("question_order")
         combined_data["answers"] = session.get("answers")
         combined_data["pre_survey_answers"] = session.get("pre_survey_data")
