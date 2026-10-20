@@ -120,6 +120,51 @@ def compute_covariates(realized_types, position_0idx):
     }
 
 
+def compute_design_fields(realized_types, position_0idx, design_version):
+    """
+    Design-specific per-trial fields for the trial at `position_0idx`.
+
+    `realized_types` and `design_version` must come from the participant's
+    own saved assignment, never from whichever sequences are currently
+    active, so a legacy participant is never labelled with Option 6 probes.
+
+      idk_encounter_number      1, 2, 3… on IDK trials (this is the n-th IDK
+                                the participant has seen); None otherwise.
+      is_primary_option6_probe  True only for W trials at positions 8 and 13
+                                under the Option 6 design.
+      option6_probe_context     "immediate_after_idk" / "one_correct_between"
+                                on those primary probes; None otherwise.
+    """
+    from .sequences import (  # local import, as in section_for_position
+        SEQUENCE_DESIGN_VERSION,
+        OPTION6_PRIMARY_PROBE_POSITIONS,
+        probe_context,
+    )
+
+    current_type = realized_types[position_0idx]
+    position_1idx = position_0idx + 1
+
+    idk_encounter_number = None
+    if current_type == TrialType.IDK.value:
+        idk_encounter_number = 1 + sum(
+            1 for t in realized_types[:position_0idx] if t == TrialType.IDK.value
+        )
+
+    is_primary = (
+        design_version == SEQUENCE_DESIGN_VERSION
+        and position_1idx in OPTION6_PRIMARY_PROBE_POSITIONS
+        and current_type == TrialType.CONFIDENT_WRONG.value
+    )
+
+    return {
+        "idk_encounter_number": idk_encounter_number,
+        "is_primary_option6_probe": is_primary,
+        "option6_probe_context": (
+            probe_context(realized_types, position_1idx) if is_primary else None
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
@@ -130,8 +175,8 @@ _SECTION_LABELS = ["early", "middle", "late"]
 
 def section_for_position(position_1idx):
     """Map a 1-indexed trial position to "early"/"middle"/"late" using
-    sequences.SECTION_BOUNDARIES, so this always matches the Phase 2
-    self-test's own section definition instead of a second hardcoded copy."""
+    sequences.SECTION_BOUNDARIES, so there is only one copy of the
+    boundaries. Descriptive only; not a design constraint under Option 6."""
     from .sequences import SECTION_BOUNDARIES  # local import: avoids a cycle at module load
 
     idx0 = position_1idx - 1

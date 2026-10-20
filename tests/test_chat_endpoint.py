@@ -352,3 +352,32 @@ def test_missing_active_question_returns_400():
 def test_missing_message_returns_400(client):
     resp = client.post("/chat", json={})
     assert resp.status_code == 400
+
+
+def test_api_exception_is_logged_as_error_and_kept_out_of_model_history(client):
+    """An exception before any reply is recorded as a technical error (the
+    participant saw only a retry notice), counts as an attempt, and is not
+    replayed to the model on the next turn."""
+    with patch("app.routes.client.chat.completions.create",
+               side_effect=RuntimeError("boom")):
+        resp = client.post("/chat", json={"message": "first try"})
+    assert resp.status_code == 500
+
+    with client.session_transaction() as sess:
+        (entry,) = sess["chat_transcript"]
+        assert len(sess.get("chat_history", [])) == 0  # nothing shown
+    assert entry["entry_type"] == "followup"
+    assert entry["is_error"] is True
+    assert entry["error_reason"] == "api_exception"
+    assert entry["shown_to_participant"] is False
+    assert entry["user_message"] == "first try"
+    assert entry["assistant_message"] is None
+
+    with patch("app.routes.client.chat.completions.create") as mock_create:
+        mock_create.return_value = _make_completion("ok")
+        client.post("/chat", json={"message": "second try"})
+    _, kwargs = mock_create.call_args
+    contents = [m["content"] for m in kwargs["messages"]]
+    assert "first try" not in contents
+    assert None not in contents
+    assert contents[-1] == "second try"

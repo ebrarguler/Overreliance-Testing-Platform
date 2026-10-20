@@ -3,98 +3,26 @@ Tests for site entry links, the first-participation question on the consent
 page, and the browser-cookie repeat check (app/routes.py start/consent/final_survey,
 app/utils/participants.py, app/utils/sites.py).
 
-MongoDB is replaced by a small in-memory fake that supports only the
-operations these code paths use, including unique-index enforcement, so the
-duplicate/resume behaviour is exercised without a database.
+MongoDB is replaced by the in-memory fake in tests/fake_mongo.py, including
+unique-index enforcement, so the duplicate/resume behaviour is exercised
+without a database.
 """
 
-import copy
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from flask import Flask
-from pymongo.errors import DuplicateKeyError
 
 from app.routes import main_bp
 from app.utils.participants import PARTICIPANT_COOKIE, PRIOR_PARTICIPATION_OPTIONS
-
-
-_MISSING = object()
-
-
-class FakeCollection:
-    def __init__(self):
-        self.docs = []
-        self.unique = {}  # index name -> field
-
-    @staticmethod
-    def _get(doc, dotted):
-        for part in dotted.split("."):
-            if not isinstance(doc, dict) or part not in doc:
-                return _MISSING
-            doc = doc[part]
-        return doc
-
-    def _matches(self, doc, query):
-        return all(self._get(doc, k) == v for k, v in query.items())
-
-    def create_index(self, field, unique=False, name=None, partialFilterExpression=None):
-        if unique:
-            self.unique[name or f"{field}_1"] = field
-
-    def index_information(self):
-        return {name: {} for name in self.unique}
-
-    def drop_index(self, name):
-        del self.unique[name]
-
-    def _check_unique(self, doc):
-        for field in self.unique.values():
-            value = self._get(doc, field)
-            if value is not _MISSING and any(self._get(d, field) == value for d in self.docs):
-                raise DuplicateKeyError(f"dup {field}")
-
-    def find_one(self, query):
-        for d in self.docs:
-            if self._matches(d, query):
-                return copy.deepcopy(d)
-        return None
-
-    def find(self, query=None):
-        return [copy.deepcopy(d) for d in self.docs if self._matches(d, query or {})]
-
-    def insert_one(self, doc):
-        self._check_unique(doc)
-        self.docs.append(copy.deepcopy(doc))
-
-    def update_one(self, query, update, upsert=False):
-        for d in self.docs:
-            if self._matches(d, query):
-                d.update(update.get("$set", {}))
-                for k, v in update.get("$inc", {}).items():
-                    d[k] = d.get(k, 0) + v
-                return type("R", (), {"upserted_id": None})()
-        if upsert:
-            doc = {**query, **update.get("$setOnInsert", {}), **update.get("$set", {})}
-            self.insert_one(doc)
-            return type("R", (), {"upserted_id": "new"})()
-        return type("R", (), {"upserted_id": None})()
-
-    def find_one_and_update(self, query, update, sort, return_document):
-        (field, _), (tie, _) = sort
-        doc = sorted(self.docs, key=lambda d: (d[field], d[tie]))[0]
-        for k, v in update["$inc"].items():
-            doc[k] += v
-        return copy.deepcopy(doc)
+from tests.fake_mongo import FakeCollection, FakeDB
 
 
 @pytest.fixture
 def db():
-    collections = {}
-
-    def get_collection(name):
-        return collections.setdefault(name, FakeCollection())
+    collections = FakeDB()
+    get_collection = collections.get_collection
 
     with patch("app.utils.participants.get_collection", get_collection), patch(
         "app.utils.assignment.get_collection", get_collection

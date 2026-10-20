@@ -8,21 +8,48 @@ aggregate metric computed from trial data, under the three-trial-type design
 document and the code ever disagree, that's a bug — fix one to match the
 other, don't just pick whichever seems more convenient.
 
-**Read the "Critical design issue" section before doing anything with
-`is_post_idk_cw`.** It is not computable as a nonzero variable under the
-current sequence table — this is a property of the sequence design, not a
-data-quality problem to explain away in analysis.
+**Two sequence designs exist in the data.** Records from the earlier
+six-order design (S1–S6) have no `sequence_design_version`; records from the
+current Option 6 design have `sequence_design_version = "option6_v1"`. They
+differ in what `is_post_idk_cw` can be (§5) and in which trials are primary
+probes (§5.1). Analyse them separately; the export never pools them (§8).
 
 ---
 
 ## 1. Trial-type design recap
 
 Every trial has a `trial_type` ∈ {`correct`, `confident_wrong`, `idk`}
-(`app/utils/trial_types.py:TrialType`). Which type a given problem is shown
-under is assigned per participant (see `app/utils/sequences.py`), not fixed
-to the problem — the same problem can be `correct` for one participant and
-`confident_wrong` for another, so problem difficulty is not confounded with
-condition.
+(`app/utils/trial_types.py:TrialType`). The type at each presentation
+position comes from the participant's assigned order (`app/utils/sequences.py`).
+Which problem fills each position is rotated per participant, drawing only
+from problems with an authored variant of that type. In principle the same
+problem can be `correct` for one participant and `confident_wrong` for
+another; with the variants currently authored it cannot (see §6.1).
+
+### 1.1 Option 6 orders (`sequence_design_version = "option6_v1"`)
+
+```
+Position:  1  2  3  4  5  6  7  8  9 10 11 12 13 14
+Order A:   C  C  W  I  C  C  I  W  C  C  I  C  W  C
+Order B:   C  C  W  I  C  I  C  W  C  C  C  I  W  C
+```
+
+New participants are allocated to A or B, whichever has fewer assignments
+(random when tied). The primary comparison is between the `confident_wrong`
+trials at positions 8 and 13: in A, position 8 directly follows an IDK and
+position 13 has one correct trial in between; in B it is the other way round.
+Every participant therefore contributes one trial of each arrangement
+(`I → W` and `I → C → W`). The design tests **recent IDK placement**. It does
+not compare IDK exposure with no IDK exposure (both probes come after at
+least two IDKs), and it is not a balanced Latin square: position and
+arrangement are counterbalanced only across the two orders. Position 3 is a
+shared `confident_wrong` trial before any IDK and is not part of the primary
+comparison.
+
+### 1.2 Legacy S1–S6 orders (no `sequence_design_version`)
+
+Six orders, listed in `sequences.LEGACY_SEQUENCES`. Participants assigned
+one of them keep it on resume; they are never reassigned to A/B.
 
 - **`correct`**: the AI's recommendation states the ground-truth answer.
 - **`confident_wrong`**: the AI's recommendation confidently states a
@@ -87,11 +114,12 @@ Mongo document (indexed by problem id, not presentation position — see
 | Field | Type | Notes |
 |---|---|---|
 | `participant_id` | str (uuid4) | Stable, non-PII id from `participant_assignments`. Use this to join across tables — never join on email. |
-| `sequence_id` | str | e.g. `"S3"` |
+| `sequence_id` | str | Assigned order: `"A"`/`"B"` (Option 6) or `"S1"`…`"S6"` (legacy) |
+| `sequence_design_version` | str or null | `"option6_v1"`; null/absent for legacy records |
 | `position` | int, 1–14 | Presentation position |
 | `section` | `early`\|`middle`\|`late` | Positions 1–5 / 6–10 / 11–14, from `sequences.SECTION_BOUNDARIES` |
 | `problem_id` | int | Stable question id, independent of position |
-| `trial_type` | `correct`\|`confident_wrong`\|`idk` | |
+| `trial_type` | `correct`\|`confident_wrong`\|`idk` | The variant actually shown. Use this, not `response_type` (the problem's default category in `questions.py`, kept for backward compatibility) |
 | `answer` | str | Final answer (alias: `answer_revisions.final_answer`) |
 | `correct_answer` | str | Ground truth |
 | `is_correct` | bool | `answer == correct_answer` |
@@ -108,8 +136,11 @@ Mongo document (indexed by problem id, not presentation position — see
 | `answer_revisions.n_changes` | int | Count of selection changes *after* the first (see §4) |
 | `chat.n_turns` | int | **Successful** follow-up messages: excludes the fixed "what's your recommended answer" trigger exchange *and* any turn where the model call failed (see `chat.transcript[].is_error` below) — this is what `followup_rate`/`idk_followup_rate` (§8.4, §8.6) are computed from |
 | `chat.n_turns_attempted` | int | Same as `chat.n_turns` but *including* failed turns — the participant tried to get a follow-up reply this many times, whether or not one was actually shown. Not currently used by any §8 formula; kept for auditing how often failures occur |
-| `chat.transcript` | list | Every exchange for this trial, each `{timestamp, user_message, assistant_message, prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, is_initial_recommendation, is_error, shown_to_participant}`, plus `error_reason`/`finish_reason`/`raw_completion` on failed turns — see §4.3 |
+| `chat.transcript` | list | Every exchange for this trial, each `{entry_type, timestamp, user_message, assistant_message, prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, is_initial_recommendation, is_error, shown_to_participant}`, plus `error_reason`/`finish_reason`/`raw_completion` on failed turns — see §4.4. `entry_type` is `initial_recommendation_request` or `followup` (absent on older records; `is_initial_recommendation` carries the same information) |
 | `covariates.*` | — | See §4.2 |
+| `idk_encounter_number` | int or null | 1, 2, 3 on IDK trials (the n-th IDK this participant has seen); null on other trials. Absent on records written before this field existed |
+| `is_primary_option6_probe` | bool | True only for `confident_wrong` trials at positions 8 and 13 when `sequence_design_version == "option6_v1"`. Absent on older records |
+| `option6_probe_context` | str or null | `"immediate_after_idk"` or `"one_correct_between"` on primary probes; null otherwise. Absent on older records |
 | `confidence_rating` | str or null | Only populated when `ENABLE_TRIAL_CONFIDENCE_RATING=true`; null otherwise (default) — see §7 |
 
 ---
@@ -153,12 +184,28 @@ is_post_idk_cw           = (trial_type at p == confident_wrong)
                             AND (preceding_trial_type == idk)
 ```
 
+So `trials_since_last_idk` is 1 when the previous trial is IDK, 2 when one
+trial lies between the last IDK and this one, and null before the first IDK.
+
+Design fields (`compute_design_fields` in `app/utils/measures.py`), computed
+from the participant's saved assignment (its type-at-position vector and
+`sequence_design_version`), never from whichever orders are currently active:
+
+```
+idk_encounter_number     = n_idk_seen_so_far + 1     if trial_type at p == idk, else null
+is_primary_option6_probe = design == option6_v1 AND p in {8, 13}
+                            AND trial_type at p == confident_wrong
+option6_probe_context    = "immediate_after_idk"  if primary and type at p-1 == idk
+                           "one_correct_between"  if primary and types at p-2, p-1 == idk, correct
+                           null                   otherwise
+```
+
 ### 4.3 Sections
 
 `early` = positions 1–5, `middle` = 6–10, `late` = 11–14
-(`sequences.SECTION_BOUNDARIES`). This is the same partition the Phase 2
-self-test (`tests/test_sequences.py`) checks for "exactly one W and one I per
-section" — don't hardcode a second copy of these boundaries anywhere.
+(`sequences.SECTION_BOUNDARIES`). Descriptive only: under Option 6 the
+sections are not a design constraint. Don't hardcode a second copy of these
+boundaries anywhere.
 
 ### 4.4 Failed chat turns (empty/truncated completions)
 
@@ -183,6 +230,23 @@ treated identically:
   `chat.n_turns` (§3) — see that field's definition for why this matters
   for `followup_rate`/`idk_followup_rate` (§8.4, §8.6).
 
+A third failure, an exception from the API call itself (network error,
+rejected request), shows the participant a retry notice and no reply. It is
+recorded with `is_error: true`, `error_reason: "api_exception"`,
+`error_detail` (the exception class), `assistant_message: null` and
+`shown_to_participant: false`, and counts toward `chat.n_turns_attempted`.
+Records written before this change have no entry for such failures. These
+entries are not sent to the model as history, since the participant saw no
+reply.
+
+In the transcript, the initial recommendation request is
+`entry_type: "initial_recommendation_request"` and is never a follow-up.
+Every other entry is a follow-up attempt (`entry_type: "followup"`), which is
+a successful AI reply when `is_error` is false and a technical error when it
+is true. Nothing classifies *what* a follow-up asked for: the message text is
+kept verbatim (and exported in `chat_messages.csv`) for coding later, for
+example direct answer requests versus conceptual questions.
+
 This does not affect `ai_endorsed_answer` or `reliance_code` (§2): those are
 derived entirely from the question's scripted `initial_recommendation` text,
 never from `/chat` follow-up content, so a chat failure can't change what
@@ -197,48 +261,40 @@ from a previous `question_index` is ever included.
 
 ---
 
-## 5. Critical design issue: `is_post_idk_cw` cannot occur under S1–S6
+## 5. `is_post_idk_cw` and the primary probes, by design
 
-**This is a property of the fixed sequence table, not a bug in trial
-logging, and not something a larger sample fixes.** Checked directly:
-
-```
-S1 idk->confident_wrong adjacent pairs: []
-S2 idk->confident_wrong adjacent pairs: []
-S3 idk->confident_wrong adjacent pairs: []
-S4 idk->confident_wrong adjacent pairs: []
-S5 idk->confident_wrong adjacent pairs: []
-S6 idk->confident_wrong adjacent pairs: []
-```
+### Legacy S1–S6: `is_post_idk_cw` cannot occur
 
 Every section in every one of S1–S6 is built as `C, {W|I}, C, {I|W}, C` (or,
-for the 4-slot final section, `{W|I}, C, {I|W}, C`) — the two critical slots
-in a section are always separated by a `C`, and section boundaries are
-always `C`-adjacent too. The upshot: an `idk` trial is **always** followed by
-a `correct` trial in this design, never directly by a `confident_wrong` one.
-`is_post_idk_cw` will be `False` for every trial for every participant,
-always — not "rare," *impossible*.
+for the 4-slot final section, `{W|I}, C, {I|W}, C`), so an `idk` trial is
+always followed by a `correct` one. `is_post_idk_cw` is `False` for every
+trial of every legacy participant. That is a property of the legacy table,
+not a null effect; a "0% incidence" figure for legacy data must not be
+reported as one.
 
-If `is_post_idk_cw` is meant to be the key predictor, the current sequence
-table cannot produce the contrast it's meant to measure. Options, in order
-of how much they disturb the existing design:
+### Option 6: one immediate and one one-between probe per participant
 
-1. **Broaden the predictor** to `trials_since_last_idk == 1` (already
-   computed, and non-degenerate — it's `True` whenever the immediately
-   preceding trial was `idk`, regardless of the current trial's type), if
-   the actual interest is "did an `idk` trial immediately precede this one,"
-   not specifically "...and this one was `confident_wrong`."
-2. **Add new sequences** (or edit S1–S6) that place an `I` slot immediately
-   before a `W` slot at least somewhere, then re-run
-   `validate_sequences()` (Phase 2 self-test) — it will need updating too,
-   since "every section has exactly one W and one I" no longer guarantees
-   the adjacency-avoidance you'd be deliberately breaking.
-3. **Accept `is_post_idk_cw` is unobservable** in this design and drop it
-   from the analysis plan.
+`is_post_idk_cw` is `True` exactly once per participant: A8 or B13. Its
+counterpart, a W with one correct trial between it and the last IDK
+(`trials_since_last_idk == 2`, `preceding_trial_type == correct`), is A13 or
+B8. Both are labelled directly in `option6_probe_context`:
 
-Not raising this and instead quietly reporting "0% incidence" would be
-indistinguishable from a real null effect in a table — don't ship that
-without this note attached.
+| Order | Position 8 | Position 13 |
+|---|---|---|
+| A | `immediate_after_idk` | `one_correct_between` |
+| B | `one_correct_between` | `immediate_after_idk` |
+
+At position 8 both orders have seen two IDKs; at position 13, three. The
+context comparison is therefore not confounded with how many IDKs were seen,
+but within an order it is confounded with position (8 vs 13), which is
+balanced only across orders. The W at position 3 precedes every IDK and has
+`is_primary_option6_probe = False`.
+
+### 5.1 Selecting Option 6 records
+
+Filter on `sequence_design_version == "option6_v1"` (or `design_group` in the
+export). Never compare `sequence_id` values across designs: legacy `S1`/`S2`
+are not Option 6 `A`/`B`.
 
 ---
 
@@ -254,6 +310,29 @@ option, this will silently start returning `None` for that question. Check
 `scripts/export_data.py`'s export summary (or query for
 `trial_type == "confident_wrong" AND ai_endorsed_answer IS null`) after
 authoring or editing any `confident_wrong` variant text.
+
+---
+
+### 6.1 Known limitation: rotation is only within trial type
+
+Rotation draws each type from problems with an authored, non-`TODO` variant
+of that type. In the current question bank:
+
+| Problems | Authored variants |
+|---|---|
+| 0–7 | `correct` only |
+| 8–10 | `confident_wrong`, `idk` (IDK wording marked `pending_final_review`) |
+| 11–13 | `confident_wrong` only |
+
+Each order needs 8 C, 3 W and 3 I, and IDK is filled first, so every
+participant sees problems 0–7 as `correct`, 8–10 as `idk` and 11–13 as
+`confident_wrong`. Within a type the problems are shuffled, so each of 11–13
+appears at W positions 3, 8 and 13 across participants, and no W problem is
+tied to one probe context. But problem identity is fully confounded with
+trial type: `confident_wrong` reliance is measured only on problems 11–13
+and IDK behaviour only on 8–10. Removing that confound needs new authored
+variants (e.g. `idk` for 11–13, `confident_wrong`/`idk` for 0–7, `correct`
+for 8–13); that is a stimulus decision, not a code change.
 
 ---
 
@@ -303,8 +382,8 @@ overall_accept_rate = count(t in T where t.reliance_code == ACCEPTED) / (|T_corr
 divided by *all* trials, because all trials had a recommendation. Here the
 denominator is explicitly `|T_correct| + |T_cw|` — `idk` trials are excluded,
 not counted as non-accepted. Dividing by `|T|` instead would understate this
-rate proportionally to how many `idk` trials the participant saw, which
-differs by design across S1–S6's balanced-but-not-identical arrangements.
+rate in proportion to the number of `idk` trials (3 per participant in both
+designs), counting abstentions as non-acceptance.
 **Never compute this by dividing by `|T|`.**
 
 ### 8.4 IDK-trial outcomes (reported separately, not folded into 8.1–8.3)
@@ -333,6 +412,27 @@ revision_rate[type] = count(t in T_type where t.answer_revisions.n_changes > 0) 
 Always report these per `trial_type`, not pooled — pooling hides exactly the
 positional/type-conditional effects this design exists to detect.
 
+### 8.7 Option 6 primary probes
+```
+P_ctx = { t in T : t.is_primary_option6_probe and t.option6_probe_context == ctx }
+probe_reliance_rate[ctx] = count(t in P_ctx where t.reliance_code == ACCEPTED) / |P_ctx|
+probe_accuracy[ctx]      = count(t in P_ctx where t.is_correct) / |P_ctx|
+```
+for `ctx` ∈ {`immediate_after_idk`, `one_correct_between`}. Each Option 6
+participant contributes one trial to each, so this is a within-participant
+comparison; analyse it with a paired or mixed model, not as two independent
+samples. Two orders do not make the study adequately powered; that depends
+on sample size and effect size.
+
+### 8.8 Designs are summarised separately
+
+`scripts/export_data.py` computes every metric above once per
+`design_group` (`option6_v1` or `legacy_unversioned`) in `aggregates.json`
+and never pools them. `--design <group>` restricts all output files to one
+group. Legacy records lack `idk_encounter_number`, `is_primary_option6_probe`
+and `option6_probe_context`; the export leaves these blank rather than
+filling them in.
+
 ---
 
 ## 9. What changed from the original (two-type) study's assumptions
@@ -346,5 +446,5 @@ positional/type-conditional effects this design exists to detect.
   `problem_id` can be `correct` for one participant and `confident_wrong` for
   another. Aggregating "by problem" without also conditioning on
   `trial_type` will mix conditions.
-- **`is_post_idk_cw` cannot occur under the current sequence table** — §5.
-  This is the most important one to not miss.
+- **`is_post_idk_cw` cannot occur under the legacy S1–S6 table, and occurs
+  once per participant under Option 6** — §5. Keep the two designs apart.

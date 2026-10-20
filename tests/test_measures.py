@@ -11,10 +11,16 @@ from app.utils.measures import (
     get_ai_endorsed_answer,
     compute_reliance_code,
     compute_covariates,
+    compute_design_fields,
     section_for_position,
 )
 from app.utils.trial_types import TrialType
-from app.utils.sequences import SEQUENCES, SEQUENCE_LABELS
+from app.utils.sequences import (
+    LEGACY_SEQUENCES,
+    SEQUENCE_DESIGN_VERSION,
+    SEQUENCES,
+    SEQUENCE_LABELS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -113,18 +119,87 @@ def test_is_post_idk_cw_false_when_preceded_by_idk_but_current_is_not_cw():
     assert cov["is_post_idk_cw"] is False
 
 
-@pytest.mark.parametrize("seq", SEQUENCES, ids=SEQUENCE_LABELS)
-def test_is_post_idk_cw_never_occurs_under_the_real_sequence_table(seq):
-    """
-    Documents the Phase 2 design finding in docs/MEASURES.md section 5:
-    no sequence in S1-S6 ever places idk immediately before confident_wrong,
-    so is_post_idk_cw is structurally always False under this table. If this
-    test ever fails, the sequence table changed — go update MEASURES.md
-    section 5, don't just delete this test.
-    """
+@pytest.mark.parametrize("seq", list(LEGACY_SEQUENCES.values()), ids=list(LEGACY_SEQUENCES))
+def test_is_post_idk_cw_never_occurs_under_the_legacy_table(seq):
+    """No legacy S1-S6 order places idk immediately before confident_wrong
+    (docs/MEASURES.md section 5), so legacy records have it always False."""
     for pos in range(1, len(seq)):
-        cov = compute_covariates(seq, pos)
-        assert cov["is_post_idk_cw"] is False
+        assert compute_covariates(seq, pos)["is_post_idk_cw"] is False
+
+
+@pytest.mark.parametrize("label,seq", list(zip(SEQUENCE_LABELS, SEQUENCES)))
+def test_is_post_idk_cw_occurs_once_per_option6_order(label, seq):
+    hits = [p + 1 for p in range(len(seq)) if compute_covariates(seq, p)["is_post_idk_cw"]]
+    assert hits == {"A": [8], "B": [13]}[label]
+
+
+@pytest.mark.parametrize("label,seq", list(zip(SEQUENCE_LABELS, SEQUENCES)))
+def test_trials_since_last_idk_at_primary_probes(label, seq):
+    expected = {"A": {8: 1, 13: 2}, "B": {8: 2, 13: 1}}[label]
+    for position, value in expected.items():
+        cov = compute_covariates(seq, position - 1)
+        assert cov["trials_since_last_idk"] == value
+        assert cov["n_idk_seen_so_far"] == {8: 2, 13: 3}[position]
+    # Before the first IDK (position 4) there is no previous IDK.
+    assert compute_covariates(seq, 2)["trials_since_last_idk"] is None
+
+
+# ---------------------------------------------------------------------------
+# compute_design_fields
+# ---------------------------------------------------------------------------
+
+
+def _design_fields(seq, design_version=SEQUENCE_DESIGN_VERSION):
+    return [compute_design_fields(seq, p, design_version) for p in range(len(seq))]
+
+
+@pytest.mark.parametrize(
+    "label,expected",
+    [
+        ("A", {8: "immediate_after_idk", 13: "one_correct_between"}),
+        ("B", {8: "one_correct_between", 13: "immediate_after_idk"}),
+    ],
+)
+def test_primary_probe_labels(label, expected):
+    seq = SEQUENCES[SEQUENCE_LABELS.index(label)]
+    fields = _design_fields(seq)
+    probes = {
+        p + 1: f["option6_probe_context"]
+        for p, f in enumerate(fields)
+        if f["is_primary_option6_probe"]
+    }
+    assert probes == expected
+    # Every other trial, including the W at position 3, is outside the comparison.
+    for p, f in enumerate(fields, start=1):
+        if p not in expected:
+            assert f["is_primary_option6_probe"] is False
+            assert f["option6_probe_context"] is None
+
+
+@pytest.mark.parametrize("label,seq", list(zip(SEQUENCE_LABELS, SEQUENCES)))
+def test_idk_encounter_numbers(label, seq):
+    fields = _design_fields(seq)
+    numbers = {p + 1: f["idk_encounter_number"] for p, f in enumerate(fields)}
+    idk_positions = {"A": [4, 7, 11], "B": [4, 6, 12]}[label]
+    assert {p: numbers[p] for p in idk_positions} == dict(zip(idk_positions, [1, 2, 3]))
+    for p, n in numbers.items():
+        if p not in idk_positions:
+            assert n is None
+
+
+@pytest.mark.parametrize("design_version", [None, "some_other_design"])
+def test_no_option6_probes_outside_the_option6_design(design_version):
+    # Even a legacy participant who happens to have W at 8 or 13 (e.g. S2
+    # has W at 13) is never labelled with an Option 6 probe.
+    for seq in list(LEGACY_SEQUENCES.values()) + SEQUENCES:
+        for f in _design_fields(seq, design_version):
+            assert f["is_primary_option6_probe"] is False
+            assert f["option6_probe_context"] is None
+
+
+def test_legacy_idk_encounter_numbers_come_from_the_saved_order():
+    fields = _design_fields(LEGACY_SEQUENCES["S1"], None)
+    assert [p + 1 for p, f in enumerate(fields) if f["idk_encounter_number"]] == [4, 9, 13]
 
 
 # ---------------------------------------------------------------------------

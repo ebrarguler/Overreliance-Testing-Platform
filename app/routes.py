@@ -30,13 +30,14 @@ from .utils.participants import (
     mark_completed,
 )
 from .utils.sites import get_site
-from .utils.assignment import get_or_create_assignment
+from .utils.assignment import get_or_create_assignment, get_assignment
 from .utils.trial_types import is_misleading
 from .utils.chat_prompting import build_system_message
 from .utils.measures import (
     get_ai_endorsed_answer,
     compute_reliance_code,
     compute_covariates,
+    compute_design_fields,
     section_for_position,
     trial_confidence_rating_enabled,
 )
@@ -96,6 +97,9 @@ def _load_assignment(participant_id):
     session["question_order"] = assignment["question_order"]
     session["variant_assignments"] = assignment["variant_assignments"]
     session["sequence_label"] = assignment["sequence_label"]
+    # None for a legacy (S1..S6) assignment. Never shown to the participant
+    # and never sent to the model.
+    session["sequence_design_version"] = assignment["sequence_design_version"]
 
 
 def _attach_participant(participant, next_url):
@@ -321,6 +325,9 @@ def quiz():
                 for q_idx in session["question_order"]
             ]
             covariates = compute_covariates(realized_types, position_0idx)
+            design_fields = compute_design_fields(
+                realized_types, position_0idx, session.get("sequence_design_version")
+            )
 
             # Follow-up chat for this specific trial — excludes the fixed
             # "get initial recommendation" exchange, which is not a genuine
@@ -355,7 +362,11 @@ def quiz():
                 "position": position_0idx + 1,
                 "section": section_for_position(position_0idx + 1),
                 "sequence_id": session.get("sequence_label"),
+                "sequence_design_version": session.get("sequence_design_version"),
                 "trial_type": variant_shown,
+                # The question's default category from questions.py, kept for
+                # backward compatibility. NOT the condition shown: that is
+                # trial_type / variant_shown.
                 "response_type": question["response_type"],
                 "variant_shown": variant_shown,
                 # Legacy binary correct/misleading flag, derived from the
@@ -398,6 +409,7 @@ def quiz():
                 },
 
                 "covariates": covariates,
+                **design_fields,
 
                 "confidence_rating": confidence_rating,
             }
@@ -471,6 +483,7 @@ def initial_recommendation():
     session["chat_transcript"] = session.get("chat_transcript", [])
     session["chat_transcript"].append({
         "question_index": current_q_index,
+        "entry_type": "initial_recommendation_request",
         "is_initial_recommendation": True,
         "is_error": False,
         "shown_to_participant": True,
@@ -495,6 +508,7 @@ def chat():
     if not user_message:
         return jsonify({"error": "No message provided"}), 400
 
+    current_q_index = None
     try:
         # current_q_index/variant are re-derived from the session on every call,
         # so each request's system prompt reflects only the trial currently in
@@ -517,9 +531,12 @@ def chat():
         # actually shown to the participant for each turn (the neutral
         # retry message on an errored turn, never a raw empty/truncated
         # completion), so the model's memory matches what the participant saw.
+        # Turns that raised before any reply (error_reason "api_exception")
+        # showed the participant only a retry notice, so they are left out.
         prior_turns = [
             entry for entry in session.get("chat_transcript", [])
             if entry["question_index"] == current_q_index
+            and entry.get("assistant_message") is not None
         ]
         messages = [{"role": "system", "content": system_message}]
         for turn in prior_turns:
@@ -575,6 +592,7 @@ def chat():
 
             session["chat_transcript"].append({
                 "question_index": current_q_index,
+                "entry_type": "followup",
                 "is_initial_recommendation": False,
                 "is_error": True,
                 "error_reason": error_reason,
@@ -599,6 +617,7 @@ def chat():
 
         session["chat_transcript"].append({
             "question_index": current_q_index,
+            "entry_type": "followup",
             "is_initial_recommendation": False,
             "is_error": False,
             "finish_reason": finish_reason,
@@ -615,6 +634,22 @@ def chat():
         return jsonify({"response": bot_response})
     except Exception as e:
         logger.error(f"OpenAI API error: {str(e)}")
+        if current_q_index is not None:
+            # Kept in the research log as a technical error. The participant
+            # saw a retry notice, not a reply.
+            session["chat_transcript"] = session.get("chat_transcript", [])
+            session["chat_transcript"].append({
+                "question_index": current_q_index,
+                "entry_type": "followup",
+                "is_initial_recommendation": False,
+                "is_error": True,
+                "error_reason": "api_exception",
+                "error_detail": type(e).__name__,
+                "shown_to_participant": False,
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "user_message": user_message,
+                "assistant_message": None,
+            })
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 
@@ -724,6 +759,19 @@ def final_survey():
         combined_data["times"] = session.get("times")
         combined_data["variant_assignments"] = session.get("variant_assignments")
         combined_data["sequence_label"] = session.get("sequence_label")
+
+        # Design metadata comes from the persisted assignment, the record of
+        # what this participant was actually given. Only values the
+        # assignment actually holds are added, so a legacy (S1..S6) record
+        # has no sequence_design_version rather than an invented one.
+        assignment = get_assignment(combined_data["participant_id"]) or {}
+        for key, source in (
+            ("sequence_design_version", "sequence_design_version"),
+            ("type_at_position", "type_at_position"),
+            ("rotation_seed", "seed"),
+        ):
+            if assignment.get(source) is not None:
+                combined_data[key] = assignment[source]
 
         #print(f"Demographics answers: {session.get('demographics')}")
 

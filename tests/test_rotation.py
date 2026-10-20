@@ -104,3 +104,39 @@ def test_rotate_problems_true_vs_false_can_differ(monkeypatch, synthetic_questio
     # fixed seed of 7 over 14 items this pins down that rotation actually ran.
     assert isinstance(seed, int)
     assert sorted(fixed_order) == sorted(seeded_order) == list(range(14))
+
+
+# ---------------------------------------------------------------------------
+# The real question bank under the Option 6 orders
+# ---------------------------------------------------------------------------
+
+from app.utils.questions import questions as real_questions  # noqa: E402
+from app.utils.trial_types import is_placeholder  # noqa: E402
+
+
+@pytest.mark.parametrize("seq_index", range(len(SEQUENCES)), ids=SEQUENCE_LABELS)
+@pytest.mark.parametrize("seed", range(25))
+def test_real_bank_gives_14_unique_questions_with_authored_variants(seq_index, seed):
+    order, variants, label, _ = build_trial_sequence(seq_index, real_questions, seed=seed)
+    assert label == SEQUENCE_LABELS[seq_index]
+    assert len(order) == 14 and len(set(order)) == 14
+    assert [variants[str(q)] for q in order] == SEQUENCES[seq_index]
+    for q in order:
+        variant = real_questions[q]["variants"][variants[str(q)]]
+        assert not is_placeholder(variant)
+
+
+@pytest.mark.parametrize("seq_index", range(len(SEQUENCES)), ids=SEQUENCE_LABELS)
+def test_w_questions_rotate_across_positions_3_8_13(seq_index):
+    """No W question is tied to one position (e.g. always the immediate-after-
+    IDK probe): across seeds, every question used as W appears at 3, 8 and 13."""
+    seen = {}
+    for seed in range(200):
+        order, variants, _, _ = build_trial_sequence(seq_index, real_questions, seed=seed)
+        for position in (3, 8, 13):
+            q = order[position - 1]
+            assert variants[str(q)] == TrialType.CONFIDENT_WRONG.value
+            seen.setdefault(q, set()).add(position)
+    assert seen, "no W questions were assigned"
+    for q, positions in seen.items():
+        assert positions == {3, 8, 13}, f"question {q} only at {positions}"

@@ -85,6 +85,12 @@ def insert_user_response(responses):
         "timestamp": datetime.datetime.now(),
         "times": responses["times"],
     }
+    # Design metadata from the persisted assignment (app.utils.assignment).
+    # Written only when known, so legacy records are never given a value
+    # they did not have.
+    for key in ("sequence_design_version", "type_at_position", "rotation_seed"):
+        if key in responses:
+            record[key] = responses[key]
     result = users_collection.update_one(
         {"participant_id": record["participant_id"]},
         {"$setOnInsert": record},

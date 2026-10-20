@@ -7,12 +7,15 @@ Usage
     # from the project root:
     python scripts/export_data.py
     python scripts/export_data.py --output-dir path/to/dir
+    python scripts/export_data.py --design option6_v1     # Option 6 only
+    python scripts/export_data.py --design legacy_unversioned
 
 Output files (written to exports/ by default)
 ----------------------------------------------
 participants.csv  — one row per participant
     Columns: participant_id, site, prior_participation, participated_before,
-             sequence, timestamp,
+             sequence_design_version, design_group, sequence,
+             type_at_position, rotation_seed, timestamp,
              six pre-survey scale means, four final-survey scale means,
              total_duration_s
 
@@ -24,9 +27,23 @@ trials.csv        — one row per participant × trial (long format)
     definitions and app/utils/measures.py for the code that computes them.
     This script does not recompute them from scratch; it flattens.
 
+chat_messages.csv — one row per chat transcript entry (initial
+    recommendation request, follow-up attempt, technical error), with the
+    full message text for later coding. No interpretation of what the
+    participant was asking for is added.
+
 aggregates.json   — sample-level metrics from docs/MEASURES.md §8, with
     denominators reported alongside every rate so a reader never has to
-    guess what was divided by what.
+    guess what was divided by what. Computed separately per design_group
+    and never pooled across designs.
+
+Designs
+-------
+`sequence_design_version` is exported exactly as stored: "option6_v1" for
+Option 6 records, blank for records made before design versioning (the
+six-order S1-S6 design). `design_group` is the same value with blanks shown
+as "legacy_unversioned", so the two can be filtered and summarised apart.
+--design restricts every output file to one design_group.
 
 Privacy
 -------
@@ -63,6 +80,9 @@ from dotenv import load_dotenv, find_dotenv  # noqa: E402
 load_dotenv(find_dotenv())
 
 from app.utils.db import init_db  # noqa: E402
+
+OPTION6_DESIGN = "option6_v1"
+LEGACY_DESIGN_GROUP = "legacy_unversioned"
 
 # ---------------------------------------------------------------------------
 # Config — edit here to change scale composition.
@@ -165,6 +185,11 @@ def scale_mean(responses: dict, items: list) -> float | None:
     return round(sum(values) / len(values), 4)
 
 
+def design_group(doc: dict) -> str:
+    """The stored sequence_design_version, or LEGACY_DESIGN_GROUP if absent."""
+    return doc.get("sequence_design_version") or LEGACY_DESIGN_GROUP
+
+
 # ---------------------------------------------------------------------------
 # Participant-level row
 # ---------------------------------------------------------------------------
@@ -185,7 +210,11 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
         "site": doc.get("site", ""),
         "prior_participation": doc.get("prior_participation", ""),
         "participated_before": doc.get("participated_before", ""),
+        "sequence_design_version": doc.get("sequence_design_version", ""),
+        "design_group": design_group(doc),
         "sequence": doc.get("sequence_label", ""),
+        "type_at_position": " ".join(doc.get("type_at_position") or []),
+        "rotation_seed": doc.get("rotation_seed", ""),
         "timestamp": str(doc.get("timestamp", "")),
     }
 
@@ -245,6 +274,8 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
         rows.append({
             "participant_id": participant_id,
             "participant_uuid": participant_uuid,
+            "sequence_design_version": doc.get("sequence_design_version", ""),
+            "design_group": design_group(doc),
             "sequence_id": record.get("sequence_id", doc.get("sequence_label", "")),
             "position": record.get("position", pos_0 + 1),
             "section": record.get("section", ""),
@@ -271,6 +302,7 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
 
             "n_followup_turns": chat.get("n_turns", ""),
             "n_followup_turns_attempted": chat.get("n_turns_attempted", ""),
+            "n_followup_errors": _count_followup_errors(chat.get("transcript")),
 
             "trials_since_last_idk": covariates.get("trials_since_last_idk"),
             "n_idk_seen_so_far": covariates.get("n_idk_seen_so_far", ""),
@@ -278,12 +310,85 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "preceding_trial_type": covariates.get("preceding_trial_type"),
             "is_post_idk_cw": covariates.get("is_post_idk_cw", ""),
 
+            "idk_encounter_number": record.get("idk_encounter_number", ""),
+            "is_primary_option6_probe": record.get("is_primary_option6_probe", ""),
+            "option6_probe_context": record.get("option6_probe_context", ""),
+
             "confidence_rating": record.get("confidence_rating"),
             "post_confidence": post.get("confidence", ""),
             "post_trust": post.get("trust", ""),
             "post_helpfulness": post.get("helpfulness", ""),
         })
 
+    return rows
+
+
+def _count_followup_errors(transcript):
+    if not isinstance(transcript, list):
+        return ""
+    return sum(
+        1 for e in transcript
+        if not e.get("is_initial_recommendation") and e.get("is_error") is True
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chat-message rows — one per transcript entry, text kept verbatim.
+# ---------------------------------------------------------------------------
+
+
+def _entry_type(entry: dict) -> str:
+    """Stored entry_type, or the same classification read from the
+    is_initial_recommendation flag on records written before entry_type."""
+    if entry.get("entry_type"):
+        return entry["entry_type"]
+    flag = entry.get("is_initial_recommendation")
+    if flag is True:
+        return "initial_recommendation_request"
+    if flag is False:
+        return "followup"
+    return ""
+
+
+def build_chat_rows(doc: dict, participant_id: int) -> list[dict]:
+    """One row per chat transcript entry, in presentation order of trials."""
+    question_order = doc.get("question_order") or []
+    answers_list = doc.get("answers") or []
+    rows = []
+    for pos_0, q_idx in enumerate(question_order):
+        record = answers_list[q_idx] if q_idx < len(answers_list) else None
+        if not isinstance(record, dict):
+            continue
+        transcript = (record.get("chat") or {}).get("transcript") or []
+        followup_n = 0
+        for i, entry in enumerate(transcript, start=1):
+            kind = _entry_type(entry)
+            is_error = entry.get("is_error")
+            if kind == "followup":
+                followup_n += 1
+            rows.append({
+                "participant_id": participant_id,
+                "participant_uuid": doc.get("participant_id", ""),
+                "sequence_design_version": doc.get("sequence_design_version", ""),
+                "design_group": design_group(doc),
+                "sequence_id": record.get("sequence_id", doc.get("sequence_label", "")),
+                "position": record.get("position", pos_0 + 1),
+                "problem_id": record.get("problem_id", q_idx),
+                "trial_type": record.get("trial_type", record.get("variant_shown", "")),
+                "message_index": i,
+                "entry_type": kind,
+                "followup_attempt_number": followup_n if kind == "followup" else "",
+                "is_successful_ai_reply": (
+                    (is_error is False) if kind == "followup" and is_error is not None else ""
+                ),
+                "is_error": "" if is_error is None else is_error,
+                "error_reason": entry.get("error_reason", ""),
+                "shown_to_participant": entry.get("shown_to_participant", ""),
+                "timestamp": entry.get("timestamp", ""),
+                "user_message": entry.get("user_message", ""),
+                "assistant_message": entry.get("assistant_message") or "",
+                "raw_completion": entry.get("raw_completion") or "",
+            })
     return rows
 
 
@@ -353,22 +458,42 @@ def compute_aggregates(all_trial_rows: list[dict]) -> dict:
         endorsed, lambda r: r.get("aligned_with_ai") is True
     )
 
-    # §5 — is_post_idk_cw incidence check. This SHOULD be 0/0 or 0/N under
-    # the current S1-S6 sequence table (see docs/MEASURES.md §5) — a nonzero
-    # numerator here means either the sequence table changed, or something
-    # upstream is miscomputing this covariate. Either way, look at it.
+    # §5 — is_post_idk_cw incidence. Under the legacy S1-S6 table this is
+    # structurally 0; under Option 6 it is exactly one trial per participant
+    # (A8 / B13). Anything else means the computation or the data is off.
     is_post_idk_cw_count = sum(1 for r in all_trial_rows if r.get("is_post_idk_cw") is True)
     aggregates["is_post_idk_cw_incidence"] = {
         "count": is_post_idk_cw_count,
         "note": (
-            "Expected to be 0 under the current S1-S6 sequence table — see "
-            "docs/MEASURES.md section 5. A nonzero count here means the "
-            "sequence table or this computation changed; re-read that "
-            "section before trusting any analysis built on this predictor."
+            "Expected 0 for legacy_unversioned (S1-S6) and one per "
+            "participant for option6_v1 — see docs/MEASURES.md section 5."
         ),
     }
 
+    # §8.7 — Option 6 primary probes (W at positions 8 and 13), by context.
+    # Present only when such trials exist (i.e. option6_v1 records).
+    probes = [r for r in all_trial_rows if r.get("is_primary_option6_probe") is True]
+    if probes:
+        by_context = {}
+        for context in ("immediate_after_idk", "one_correct_between"):
+            rows = [r for r in probes if r.get("option6_probe_context") == context]
+            by_context[context] = {
+                "n_trials": len(rows),
+                "reliance_rate": named_rate(rows, lambda r: r["reliance_code"] == "ACCEPTED"),
+                "accuracy": named_rate(rows, lambda r: r["is_correct"] is True),
+            }
+        aggregates["option6_primary_probes"] = by_context
+
     return aggregates
+
+
+def compute_aggregates_by_design(all_trial_rows: list[dict]) -> dict:
+    """compute_aggregates() run separately for each design_group; designs
+    are never pooled into one summary."""
+    groups: dict[str, list[dict]] = {}
+    for row in all_trial_rows:
+        groups.setdefault(row["design_group"], []).append(row)
+    return {group: compute_aggregates(rows) for group, rows in sorted(groups.items())}
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +501,11 @@ def compute_aggregates(all_trial_rows: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 PARTICIPANT_FIELDS = (
-    ["participant_id", "participant_uuid", "site", "prior_participation", "participated_before", "sequence", "timestamp"]
+    [
+        "participant_id", "participant_uuid", "site", "prior_participation",
+        "participated_before", "sequence_design_version", "design_group",
+        "sequence", "type_at_position", "rotation_seed", "timestamp",
+    ]
     + [f"pre_{s}_mean" for s in PRE_SURVEY_SCALES]
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
     + ["total_duration_s"]
@@ -385,6 +514,8 @@ PARTICIPANT_FIELDS = (
 TRIAL_FIELDS = [
     "participant_id",
     "participant_uuid",
+    "sequence_design_version",
+    "design_group",
     "sequence_id",
     "position",
     "section",
@@ -405,16 +536,120 @@ TRIAL_FIELDS = [
     "final_answer",
     "n_changes",
     "n_followup_turns",
+    "n_followup_turns_attempted",
+    "n_followup_errors",
     "trials_since_last_idk",
     "n_idk_seen_so_far",
     "n_cw_seen_so_far",
     "preceding_trial_type",
     "is_post_idk_cw",
+    "idk_encounter_number",
+    "is_primary_option6_probe",
+    "option6_probe_context",
     "confidence_rating",
     "post_confidence",
     "post_trust",
     "post_helpfulness",
 ]
+
+CHAT_FIELDS = [
+    "participant_id",
+    "participant_uuid",
+    "sequence_design_version",
+    "design_group",
+    "sequence_id",
+    "position",
+    "problem_id",
+    "trial_type",
+    "message_index",
+    "entry_type",
+    "followup_attempt_number",
+    "is_successful_ai_reply",
+    "is_error",
+    "error_reason",
+    "shown_to_participant",
+    "timestamp",
+    "user_message",
+    "assistant_message",
+    "raw_completion",
+]
+
+# Identifying fields some legacy `users` records carry; never exported.
+IDENTIFYING_FIELDS_PROJECTION = {
+    "email": 0, "firstName": 0, "lastName": 0, "uf_id": 0, "classSchool": 0,
+}
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+
+def write_exports(docs: list[dict], output_dir: Path, design: str | None = None) -> dict:
+    """
+    Write participants.csv, trials.csv, chat_messages.csv and aggregates.json
+    for `docs` (already sorted by timestamp). `design` restricts everything
+    to one design_group. Returns a summary dict.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    n_exported = 0
+    n_skipped = 0
+    n_other_design = 0
+    participant_rows: list[dict] = []
+    all_trial_rows: list[dict] = []
+    all_chat_rows: list[dict] = []
+
+    # Numbering covers every record, so a participant keeps the same number
+    # whichever --design is selected.
+    for participant_id, doc in enumerate(docs, start=1):
+        if design is not None and design_group(doc) != design:
+            n_other_design += 1
+            continue
+        if not doc.get("question_order"):
+            print(
+                f"  Skipping record {doc.get('_id')}: no question_order "
+                "(study not completed).",
+                file=sys.stderr,
+            )
+            n_skipped += 1
+            continue
+        try:
+            participant_row = build_participant_row(doc, participant_id)
+            trial_rows = build_trial_rows(doc, participant_id)
+            chat_rows = build_chat_rows(doc, participant_id)
+        except Exception as exc:
+            print(f"  Error processing record {doc.get('_id')}: {exc}", file=sys.stderr)
+            n_skipped += 1
+            continue
+        participant_rows.append(participant_row)
+        all_trial_rows.extend(trial_rows)
+        all_chat_rows.extend(chat_rows)
+        n_exported += 1
+
+    for name, fields, rows in (
+        ("participants.csv", PARTICIPANT_FIELDS, participant_rows),
+        ("trials.csv", TRIAL_FIELDS, all_trial_rows),
+        ("chat_messages.csv", CHAT_FIELDS, all_chat_rows),
+    ):
+        with open(output_dir / name, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+
+    aggregates = compute_aggregates_by_design(all_trial_rows)
+    with open(output_dir / "aggregates.json", "w", encoding="utf-8") as af:
+        json.dump(aggregates, af, indent=2, default=str)
+
+    return {
+        "n_exported": n_exported,
+        "n_skipped": n_skipped,
+        "n_other_design": n_other_design,
+        "n_trial_rows": len(all_trial_rows),
+        "n_chat_rows": len(all_chat_rows),
+        "aggregates": aggregates,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -432,82 +667,52 @@ def main() -> None:
         metavar="DIR",
         help="Directory for output files (created if absent; default: exports/)",
     )
+    parser.add_argument(
+        "--design",
+        default=None,
+        metavar="GROUP",
+        help=(
+            f"Export only one design_group, e.g. {OPTION6_DESIGN} or "
+            f"{LEGACY_DESIGN_GROUP} (default: all, summarised separately)"
+        ),
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    participants_path = output_dir / "participants.csv"
-    trials_path = output_dir / "trials.csv"
-    aggregates_path = output_dir / "aggregates.json"
 
     print("Connecting to MongoDB…", file=sys.stderr)
     collection = init_db()
 
     # Exclude identifying fields at the query level, sort by completion time.
-    projection = {"email": 0, "firstName": 0, "lastName": 0, "uf_id": 0, "classSchool": 0}
-    docs = list(collection.find({}, projection).sort("timestamp", 1))
+    docs = list(collection.find({}, IDENTIFYING_FIELDS_PROJECTION).sort("timestamp", 1))
     print(f"Found {len(docs)} record(s).", file=sys.stderr)
 
     if not docs:
         print("Nothing to export.", file=sys.stderr)
         return
 
-    n_exported = 0
-    n_skipped = 0
-    all_trial_rows: list[dict] = []
-
-    with open(participants_path, "w", newline="", encoding="utf-8") as pf:
-        p_writer = csv.DictWriter(pf, fieldnames=PARTICIPANT_FIELDS, extrasaction="ignore")
-        p_writer.writeheader()
-
-        for participant_id, doc in enumerate(docs, start=1):
-            if not doc.get("question_order"):
-                print(
-                    f"  Skipping record {doc.get('_id')}: no question_order "
-                    "(study not completed).",
-                    file=sys.stderr,
-                )
-                n_skipped += 1
-                continue
-
-            try:
-                p_writer.writerow(build_participant_row(doc, participant_id))
-                all_trial_rows.extend(build_trial_rows(doc, participant_id))
-                n_exported += 1
-            except Exception as exc:
-                print(
-                    f"  Error processing record {doc.get('_id')}: {exc}",
-                    file=sys.stderr,
-                )
-                n_skipped += 1
-
-    with open(trials_path, "w", newline="", encoding="utf-8") as tf:
-        t_writer = csv.DictWriter(tf, fieldnames=TRIAL_FIELDS, extrasaction="ignore")
-        t_writer.writeheader()
-        t_writer.writerows(all_trial_rows)
-
-    aggregates = compute_aggregates(all_trial_rows)
-    with open(aggregates_path, "w", encoding="utf-8") as af:
-        json.dump(aggregates, af, indent=2, default=str)
+    summary = write_exports(docs, output_dir, design=args.design)
 
     print(
-        f"Exported {n_exported} participant(s), {len(all_trial_rows)} trial row(s).",
+        f"Exported {summary['n_exported']} participant(s), "
+        f"{summary['n_trial_rows']} trial row(s), "
+        f"{summary['n_chat_rows']} chat row(s).",
         file=sys.stderr,
     )
-    if n_skipped:
-        print(f"  {n_skipped} record(s) skipped.", file=sys.stderr)
-    print(f"  → {participants_path}", file=sys.stderr)
-    print(f"  → {trials_path}", file=sys.stderr)
-    print(f"  → {aggregates_path}", file=sys.stderr)
-    if aggregates["is_post_idk_cw_incidence"]["count"] > 0:
+    if summary["n_other_design"]:
         print(
-            "  NOTE: is_post_idk_cw occurred "
-            f"{aggregates['is_post_idk_cw_incidence']['count']} time(s) — "
-            "see docs/MEASURES.md section 5.",
+            f"  {summary['n_other_design']} record(s) from other designs left out.",
             file=sys.stderr,
         )
-
+    if summary["n_skipped"]:
+        print(f"  {summary['n_skipped']} record(s) skipped.", file=sys.stderr)
+    for group, agg in summary["aggregates"].items():
+        print(
+            f"  {group}: is_post_idk_cw occurred "
+            f"{agg['is_post_idk_cw_incidence']['count']} time(s).",
+            file=sys.stderr,
+        )
+    print(f"  → {output_dir}/", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
