@@ -1,6 +1,19 @@
 {% extends "base.html" %} {% block content %}
 <div class="container">
-	<h2>Post-Survey</h2>
+	<h2>Question {{ question_number }} of {{ total_questions }}: your rating</h2>
+	<div
+		class="progress-track"
+		role="progressbar"
+		aria-label="Progress through the questions"
+		aria-valuemin="0"
+		aria-valuemax="{{ total_questions }}"
+		aria-valuenow="{{ question_number }}"
+	>
+		<div
+			class="progress-fill"
+			style="width: {{ (100 * question_number / total_questions) | round(1) }}%"
+		></div>
+	</div>
 
 	<form
 		method="POST"
@@ -92,7 +105,9 @@
 			</div>
 		</div>
 
-		<button type="submit" class="survey-btn">Next Question</button>
+		<button type="submit" class="survey-btn">
+			{% if is_last_question %}Continue to final survey{% else %}Next question{% endif %}
+		</button>
 	</form>
 </div>
 {% endblock %}

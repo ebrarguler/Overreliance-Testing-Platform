@@ -1,8 +1,21 @@
 {% extends "base.html" %} {% block content %}
 
-<div class="container no-select">
+<div class="container">
   <div class="question-section">
-    <h2>Question {{ question_number }}</h2>
+    <h2>Question {{ question_number }} of {{ total_questions }}</h2>
+    <div
+      class="progress-track"
+      role="progressbar"
+      aria-label="Progress through the questions"
+      aria-valuemin="0"
+      aria-valuemax="{{ total_questions }}"
+      aria-valuenow="{{ question_number }}"
+    >
+      <div
+        class="progress-fill"
+        style="width: {{ (100 * question_number / total_questions) | round(1) }}%"
+      ></div>
+    </div>
     <pre><code>{{ question['question'] }}</code></pre>
 
     <form id="question-form" method="POST">
@@ -43,6 +56,9 @@
       <input type="hidden" name="first_submit_at" id="first_submit_at" value="" />
       <input type="hidden" name="initial_answer" id="initial_answer" value="" />
       <input type="hidden" name="n_changes" id="n_changes" value="0" />
+      <input type="hidden" name="n_copy" id="n_copy" value="0" />
+      <input type="hidden" name="n_paste" id="n_paste" value="0" />
+      <input type="hidden" name="pasted_chars" id="pasted_chars" value="0" />
     </form>
   </div>
 
@@ -63,7 +79,7 @@
         <div
           class="chat-message {{ 'user-message' if sender == 'User' else 'bot-message' }}"
         >
-          <strong>{{ sender }}:</strong>
+          <strong>{{ 'You' if sender == 'User' else sender }}:</strong>
           <span class="message-body">{{ message }}</span>
         </div>
         {% endif %} {% endfor %}
@@ -71,35 +87,30 @@
     </div>
 
     <div id="chat-div">
-      <div class="spread">
-        <input
-          type="text"
-          class="spread-grow"
+      <div class="chat-composer">
+        <textarea
           id="user-message"
+          rows="2"
           placeholder="Ask the AI assistant..."
           disabled
-        />
-        <button
-          id="send-message"
-          class="btn"
-          style="margin-left: 10px"
-          disabled
-        >
+        ></textarea>
+        <button id="send-message" type="button" class="btn btn-send" disabled>
           Send
         </button>
       </div>
+      <p class="chat-hint">Enter sends the message. Shift+Enter starts a new line.</p>
     </div>
   </div>
 
-  <div class="center" style="padding-top: 30px">
+  <div class="center submit-row">
     <button
       type="submit"
       form="question-form"
       disabled
       id="submit-answer"
-      class="btn"
+      class="btn btn-submit"
     >
-      Next
+      Submit answer
     </button>
   </div>
 </div>
@@ -118,7 +129,15 @@
 
     const radioInputs = document.querySelectorAll('input[type="radio"]');
     radioInputs.forEach((input) => (input.disabled = false));
-    document.getElementById("submit-answer").disabled = false;
+    updateSubmitState();
+  }
+
+  // Submit stays disabled until the recommendation was shown AND an answer
+  // is selected. Clicking it with nothing selected used to reload the page
+  // without saying why.
+  function updateSubmitState() {
+    const answered = document.querySelector('input[name="answer"]:checked') !== null;
+    document.getElementById("submit-answer").disabled = !(recommendationReceived && answered);
   }
 
   // --- Trial instrumentation: first interaction, answer revisions -----------
@@ -152,7 +171,31 @@
   }
 
   document.querySelectorAll('input[name="answer"]').forEach((input) => {
-    input.addEventListener("change", (e) => trackAnswerChange(e.target.value));
+    input.addEventListener("change", (e) => {
+      trackAnswerChange(e.target.value);
+      updateSubmitState();
+    });
+  });
+
+  // --- Copy / paste counts ----------------------------------------------------
+  // Copying is allowed (participants wanted to paste the code into the chat).
+  // Counted per trial so analysis can see who copied the code and who pasted
+  // something into the chat. Like n_changes, these reset on a page reload.
+  let copyCount = 0;
+  let pasteCount = 0;
+  let pastedChars = 0;
+
+  document.addEventListener("copy", () => {
+    copyCount += 1;
+    document.getElementById("n_copy").value = String(copyCount);
+  });
+
+  document.getElementById("user-message").addEventListener("paste", (e) => {
+    const text = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+    pasteCount += 1;
+    pastedChars += text.length;
+    document.getElementById("n_paste").value = String(pasteCount);
+    document.getElementById("pasted_chars").value = String(pastedChars);
   });
 
   function scrollToBottom() {
@@ -163,6 +206,7 @@
   window.onload = () => {
     renderRestoredHistory();
     if (recommendationReceived) unlockAfterRecommendation();
+    updateSubmitState();
     scrollToBottom();
   };
 
@@ -404,8 +448,10 @@
 
   document.getElementById("send-message").addEventListener("click", sendMessage);
 
+  // Enter sends; Shift+Enter inserts a new line (as in ChatGPT). Enter while
+  // an input method is composing a character must not send.
   document.getElementById("user-message").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       sendMessage();
     }

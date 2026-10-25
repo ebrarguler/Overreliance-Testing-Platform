@@ -306,6 +306,14 @@ def collect_demographics():
     return render_template("demographics.html")
 
 
+def _form_count(name):
+    """A non-negative integer counter posted by the trial page, else 0."""
+    try:
+        return max(0, int(request.form.get(name, 0) or 0))
+    except ValueError:
+        return 0
+
+
 def _initial_recommendation_entry(q_index):
     """The transcript entry for this trial's initial recommendation, if shown."""
     for entry in session.get("chat_transcript", []):
@@ -388,10 +396,7 @@ def quiz():
                 e for e in followup_chat if not e.get("is_error", False)
             ]
 
-            try:
-                n_changes = int(request.form.get("n_changes", 0) or 0)
-            except ValueError:
-                n_changes = 0
+            n_changes = _form_count("n_changes")
             initial_answer = request.form.get("initial_answer") or final_answer
 
             confidence_rating = None
@@ -448,6 +453,13 @@ def quiz():
                     "n_turns": len(successful_followup_chat),
                     "n_turns_attempted": len(followup_chat),
                     "transcript": trial_chat,
+                },
+
+                # Client-side counts; like n_changes they reset on a reload.
+                "clipboard": {
+                    "n_copy": _form_count("n_copy"),
+                    "n_paste": _form_count("n_paste"),
+                    "pasted_chars": _form_count("pasted_chars"),
                 },
 
                 "covariates": covariates,
@@ -755,7 +767,7 @@ def post_survey():
     if request.method == "POST":
         survey_data = {name: request.form.get(name) for name in POST_SURVEY_FIELDS}
         if not all(survey_data.values()):
-            return render_template("post_survey.html"), 400
+            return _render_post_survey(), 400
 
         # Stored with the trial it belongs to, so a rating can never be
         # attributed to the wrong question even if the list order is off.
@@ -775,7 +787,18 @@ def post_survey():
             return redirect(url_for("main.final_survey"))
         return redirect(url_for("main.quiz"))
 
-    return render_template("post_survey.html")
+    return _render_post_survey()
+
+
+def _render_post_survey():
+    question_number = session["question_index"] + 1
+    total_questions = len(session["question_order"])
+    return render_template(
+        "post_survey.html",
+        question_number=question_number,
+        total_questions=total_questions,
+        is_last_question=question_number == total_questions,
+    )
 
 
 FINAL_SURVEY_FIELDS = (

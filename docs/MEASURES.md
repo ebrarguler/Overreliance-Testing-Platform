@@ -137,6 +137,9 @@ Mongo document (indexed by problem id, not presentation position — see
 | `chat.n_turns` | int | **Successful** follow-up messages: excludes the fixed "what's your recommended answer" trigger exchange *and* any turn where the model call failed (see `chat.transcript[].is_error` below) — this is what `followup_rate`/`idk_followup_rate` (§8.4, §8.6) are computed from |
 | `chat.n_turns_attempted` | int | Same as `chat.n_turns` but *including* failed turns — the participant tried to get a follow-up reply this many times, whether or not one was actually shown. Not currently used by any §8 formula; kept for auditing how often failures occur |
 | `chat.transcript` | list | Every exchange for this trial, each `{entry_type, timestamp, user_message, assistant_message, prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, is_initial_recommendation, is_error, shown_to_participant}`, plus `error_reason`/`finish_reason`/`raw_completion` on failed turns — see §4.4. `entry_type` is `initial_recommendation_request` or `followup` (absent on older records; `is_initial_recommendation` carries the same information) |
+| `clipboard.n_copy` | int | Copy events on the trial page (copying the code is allowed). Client-side; resets on a page reload, like `n_changes`. Absent on records written before this field existed |
+| `clipboard.n_paste` | int | Paste events into the chat box. Same caveats |
+| `clipboard.pasted_chars` | int | Total characters pasted into the chat box. Same caveats |
 | `covariates.*` | — | See §4.2 |
 | `idk_encounter_number` | int or null | 1, 2, 3 on IDK trials (the n-th IDK this participant has seen); null on other trials. Absent on records written before this field existed |
 | `is_primary_option6_probe` | bool | True only for `confident_wrong` trials at positions 8 and 13 when `sequence_design_version == "option6_v1"`. Absent on older records |

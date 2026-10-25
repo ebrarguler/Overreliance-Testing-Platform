@@ -595,3 +595,82 @@ h2 {
 	color: #c0392b;
 	font-size: 0.9em;
 }
+
+/* --- Trial page: progress, chat box, buttons ------------------------------ */
+
+.progress-track {
+	height: 8px;
+	margin: -15px 0 20px;
+	background-color: #e3e7ea;
+	border-radius: 4px;
+	overflow: hidden;
+}
+
+.progress-fill {
+	height: 100%;
+	background-color: #3498db;
+	border-radius: 4px;
+}
+
+.chat-composer {
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
+}
+
+.chat-composer #user-message {
+	min-height: 44px;
+	max-height: 200px;
+	resize: vertical;
+	font-family: inherit;
+	font-size: inherit;
+	line-height: 1.4;
+}
+
+.chat-hint {
+	margin: 4px 0 0;
+	font-size: 0.8em;
+	color: #888;
+}
+
+/* Participant messages keep their line breaks (pasted code, Shift+Enter). */
+.user-message .message-body {
+	white-space: pre-wrap;
+}
+
+/* Send is a secondary action inside the chat; Submit answer is the one
+   button that leaves the page, so the two must not look alike. */
+.btn-send {
+	background-color: #fff;
+	color: #3498db;
+	border: 1px solid #3498db;
+}
+
+.btn-send:hover {
+	background-color: #eaf4fb;
+}
+
+.btn-send:disabled {
+	background-color: #fff;
+	color: #b0b8bf;
+	border-color: #d5dadf;
+}
+
+.submit-row {
+	padding-top: 30px;
+}
+
+.btn-submit {
+	background-color: #27ae60;
+	padding: 12px 32px;
+	font-size: 1rem;
+	font-weight: bold;
+}
+
+.btn-submit:hover {
+	background-color: #1e8449;
+}
+
+.btn-submit:disabled {
+	background-color: #b8c2c8;
+}

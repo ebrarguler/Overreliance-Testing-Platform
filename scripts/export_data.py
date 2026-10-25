@@ -270,6 +270,7 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
         revisions = record.get("answer_revisions") or {}
         covariates = record.get("covariates") or {}
         chat = record.get("chat") or {}
+        clipboard = record.get("clipboard") or {}
 
         rows.append({
             "participant_id": participant_id,
@@ -303,6 +304,10 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "n_followup_turns": chat.get("n_turns", ""),
             "n_followup_turns_attempted": chat.get("n_turns_attempted", ""),
             "n_followup_errors": _count_followup_errors(chat.get("transcript")),
+
+            "n_copy": clipboard.get("n_copy", ""),
+            "n_paste": clipboard.get("n_paste", ""),
+            "pasted_chars": clipboard.get("pasted_chars", ""),
 
             "trials_since_last_idk": covariates.get("trials_since_last_idk"),
             "n_idk_seen_so_far": covariates.get("n_idk_seen_so_far", ""),
@@ -538,6 +543,9 @@ TRIAL_FIELDS = [
     "n_followup_turns",
     "n_followup_turns_attempted",
     "n_followup_errors",
+    "n_copy",
+    "n_paste",
+    "pasted_chars",
     "trials_since_last_idk",
     "n_idk_seen_so_far",
     "n_cw_seen_so_far",
