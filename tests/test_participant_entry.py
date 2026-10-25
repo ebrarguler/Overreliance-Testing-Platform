@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from flask import Flask
 
-from app.routes import main_bp
+from app.routes import FINAL_SURVEY_FIELDS, main_bp
 from app.utils.participants import PARTICIPANT_COOKIE, PRIOR_PARTICIPATION_OPTIONS
 from tests.fake_mongo import FakeCollection, FakeDB
 
@@ -60,9 +60,11 @@ def _enter(client, site="uzh", prior="no", form=None):
 
 
 def _finish(client):
+    """Skip straight past the 14 questions, then submit the final survey."""
     with client.session_transaction() as sess:
         sess["answers"] = []
-    return client.post("/final_survey", data={})
+        sess["question_index"] = len(sess["question_order"])
+    return client.post("/final_survey", data={name: "4" for name in FINAL_SURVEY_FIELDS})
 
 
 def _new_browser(client):

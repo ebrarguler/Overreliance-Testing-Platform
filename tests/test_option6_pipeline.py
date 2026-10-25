@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 from flask import Flask
 
-from app.routes import main_bp
+from app.routes import FINAL_SURVEY_FIELDS, main_bp
 from app.utils.participants import PARTICIPANT_COOKIE
 from app.utils.questions import questions, get_chat_prompt
 from app.utils.sequences import LEGACY_SEQUENCES, SEQUENCES, SEQUENCE_LABELS
@@ -117,7 +117,7 @@ def _run_study(client):
         client.post("/quiz", data={"answer": answer, "n_changes": "0"})
         client.post("/post_survey", data={"confidence": "4", "trust": "4", "helpfulness": "4"})
 
-    client.post("/final_survey", data={})
+    client.post("/final_survey", data={name: "4" for name in FINAL_SURVEY_FIELDS})
     return sent
 
 

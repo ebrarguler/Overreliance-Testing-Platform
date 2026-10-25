@@ -11,6 +11,7 @@ import pytest
 from flask import Flask
 
 from app.routes import main_bp
+from app.utils.questions import questions
 
 
 @pytest.fixture
@@ -64,9 +65,8 @@ def test_repeat_request_does_not_log_second_exposure(client):
 def test_next_question_starts_locked_again(client):
     client.get("/quiz")
     client.get("/get_initial_recommendation")
-    client.post("/quiz", data={"answer": "x"})
-    with client.session_transaction() as sess:
-        sess["question_index"] = 1
+    client.post("/quiz", data={"answer": questions[0]["options"][0]})
+    client.post("/post_survey", data={"confidence": "4", "trust": "4", "helpfulness": "4"})
 
     html = client.get("/quiz").get_data(as_text=True)
     assert "let recommendationReceived = false;" in html
@@ -78,7 +78,9 @@ def test_first_interaction_falls_back_to_recommendation_time(client):
     (entry,) = _initial_entries(client)
 
     # Reloaded page: the client-side first_interaction_at was lost.
-    client.post("/quiz", data={"answer": "x", "first_interaction_at": ""})
+    client.post(
+        "/quiz", data={"answer": questions[0]["options"][0], "first_interaction_at": ""}
+    )
     with client.session_transaction() as sess:
         record = sess["answers"][0]
     assert record["timestamps"]["first_interaction_at"] == entry["timestamp"]

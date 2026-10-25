@@ -124,6 +124,34 @@ def _attach_participant(participant, next_url):
     return response
 
 
+def _awaiting_post_survey():
+    """True between answering the current question and rating it.
+
+    `awaiting_post_survey` holds the position (0-indexed) whose answer was
+    just recorded. The post-trial survey is accepted only once per position,
+    so going Back and resubmitting it cannot advance question_index a second
+    time and skip a question.
+    """
+    awaiting = session.get("awaiting_post_survey")
+    return awaiting is not None and awaiting == session.get("question_index")
+
+
+def _trial_in_progress():
+    """True while the current question is shown and not yet answered."""
+    return (
+        session.get("question_index", 0) < len(session.get("question_order", []))
+        and not _awaiting_post_survey()
+    )
+
+
+def _all_trials_done():
+    return (
+        "question_order" in session
+        and session.get("question_index", 0) >= len(session["question_order"])
+        and not _awaiting_post_survey()
+    )
+
+
 def _resume_url():
     """Where an in-progress participant left off, from their session state."""
     if not session.get("consented"):
@@ -133,6 +161,8 @@ def _resume_url():
     missing_page = first_incomplete_page(session.get("pre_survey_data") or {})
     if missing_page is not None:
         return url_for("main.pre_survey", page=missing_page)
+    if _awaiting_post_survey():
+        return url_for("main.post_survey")
     if session.get("question_index", 0) < len(session.get("question_order", [])):
         return url_for("main.quiz")
     return url_for("main.final_survey")
@@ -293,6 +323,12 @@ def quiz():
 
     if "question_order" not in session:
         return redirect(url_for("main.index"))
+    if _awaiting_post_survey():
+        # Already answered (e.g. Back from the post-trial survey). The
+        # recorded answer is final.
+        return redirect(url_for("main.post_survey"))
+    if session["question_index"] >= len(session["question_order"]):
+        return redirect(url_for("main.final_survey"))
 
     if session["begin"] == 0:
         session["begin"] = 1
@@ -300,12 +336,18 @@ def quiz():
         session["trial_served_at"] = datetime.datetime.utcnow().isoformat()
 
     if request.method == "POST":
-        if "answer" in request.form:
-            position_0idx = session["question_index"]
-            current_q_index = session["question_order"][position_0idx]
+        position_0idx = session["question_index"]
+        current_q_index = session["question_order"][position_0idx]
+        question = questions[current_q_index]
+        final_answer = request.form.get("answer")
+        # The options unlock only after the initial recommendation, but the
+        # browser enforces that in JavaScript alone. A POST without a real
+        # option, or before the recommendation was shown, re-shows the page.
+        if (
+            final_answer in question["options"]
+            and _initial_recommendation_entry(current_q_index) is not None
+        ):
             variant_shown = session["variant_assignments"][str(current_q_index)]
-            question = questions[current_q_index]
-            final_answer = request.form["answer"]
 
             if session["begin"] == 1:
                 session["begin"] = 0
@@ -427,52 +469,53 @@ def quiz():
                 )
             )
 
+            session["awaiting_post_survey"] = position_0idx
             return redirect(url_for("main.post_survey"))
 
-    if session["question_index"] < len(session["question_order"]):
-        current_q_index = session["question_order"][session["question_index"]]
-        question = questions[current_q_index]
+    current_q_index = session["question_order"][session["question_index"]]
+    question = questions[current_q_index]
 
-        # Only render messages from the current trial onward. chat_history
-        # accumulates every trial's exchanges plus a "Divider" entry marking
-        # the end of each finished trial, so the current trial's slice is
-        # everything after the most recent Divider (empty on a fresh trial).
-        full_history = session.get("chat_history", [])
-        last_divider_idx = -1
-        for i in range(len(full_history) - 1, -1, -1):
-            if full_history[i][0] == "Divider":
-                last_divider_idx = i
-                break
-        current_trial_history = full_history[last_divider_idx + 1:]
+    # Only render messages from the current trial onward. chat_history
+    # accumulates every trial's exchanges plus a "Divider" entry marking
+    # the end of each finished trial, so the current trial's slice is
+    # everything after the most recent Divider (empty on a fresh trial).
+    full_history = session.get("chat_history", [])
+    last_divider_idx = -1
+    for i in range(len(full_history) - 1, -1, -1):
+        if full_history[i][0] == "Divider":
+            last_divider_idx = i
+            break
+    current_trial_history = full_history[last_divider_idx + 1:]
 
-        return render_template(
-            "question.html",
-            question=question,
-            question_number=session["question_index"] + 1,
-            total_questions=len(questions),
-            chat_history=current_trial_history,
-            recommendation_shown=_initial_recommendation_entry(current_q_index) is not None,
-            enable_confidence_rating=trial_confidence_rating_enabled(),
-        )
-    else:
-        return redirect(url_for("main.final_survey"))
-    
-    
+    return render_template(
+        "question.html",
+        question=question,
+        question_number=session["question_index"] + 1,
+        total_questions=len(session["question_order"]),
+        chat_history=current_trial_history,
+        recommendation_shown=_initial_recommendation_entry(current_q_index) is not None,
+        enable_confidence_rating=trial_confidence_rating_enabled(),
+    )
 
 
 @main_bp.route("/get_initial_recommendation", methods=["GET"])
 def initial_recommendation():
     if "question_order" not in session:
         return jsonify({"error": "No active question"}), 400
+    if not _trial_in_progress():
+        return jsonify({"error": "No active question"}), 409
 
     current_q_index = session["question_order"][session["question_index"]]
     variant = session["variant_assignments"][str(current_q_index)]
     recommendation = get_initial_recommendation(current_q_index, variant)
+    # Only the text goes to the browser. The full dict also carries the
+    # trial type, which anyone could read in the network tab.
+    payload = {"recommendation": recommendation["recommendation"]}
 
     # Already shown this trial (e.g. the page was reloaded): return it again
     # without logging a second exposure.
     if _initial_recommendation_entry(current_q_index) is not None:
-        return jsonify(recommendation)
+        return jsonify(payload)
 
     user_message = "What's your recommended answer to this question?"
 
@@ -496,7 +539,7 @@ def initial_recommendation():
         "reasoning_tokens": None,
     })
 
-    return jsonify(recommendation)
+    return jsonify(payload)
 
 
 @main_bp.route("/chat", methods=["POST"])
@@ -507,6 +550,10 @@ def chat():
 
     if not user_message:
         return jsonify({"error": "No message provided"}), 400
+    if not _trial_in_progress():
+        # After the answer is submitted the question is closed; a message
+        # sent from a stale page must not be logged against it.
+        return jsonify({"error": "No active question"}), 409
 
     current_q_index = None
     try:
@@ -650,7 +697,9 @@ def chat():
                 "user_message": user_message,
                 "assistant_message": None,
             })
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+        # The exception text stays in the server log; the browser gets a
+        # generic message.
+        return jsonify({"error": "The assistant could not reply."}), 500
 
 
 @main_bp.route("/pre_survey", defaults={"page": 1}, methods=["GET", "POST"])
@@ -693,49 +742,78 @@ def instructions():
     return render_template("instructions.html")
 
 
+POST_SURVEY_FIELDS = ("confidence", "trust", "helpfulness")
+
+
 @main_bp.route("/post_survey", methods=["GET", "POST"])
 def post_survey():
+    if not _awaiting_post_survey():
+        # Nothing to rate: the current question is not answered yet, or its
+        # rating was already submitted (Back button + resubmit).
+        return redirect(_resume_url())
+
     if request.method == "POST":
-        survey_data = {
-            "confidence": request.form.get("confidence"),
-            "trust": request.form.get("trust"),
-            "helpfulness": request.form.get("helpfulness"),
-        }
+        survey_data = {name: request.form.get(name) for name in POST_SURVEY_FIELDS}
+        if not all(survey_data.values()):
+            return render_template("post_survey.html"), 400
+
+        # Stored with the trial it belongs to, so a rating can never be
+        # attributed to the wrong question even if the list order is off.
+        position_0idx = session["question_index"]
+        q_index = session["question_order"][position_0idx]
+        survey_data.update({
+            "position": position_0idx + 1,
+            "question_index": q_index,
+            "problem_id": questions[q_index]["id"],
+            "trial_type": session["variant_assignments"][str(q_index)],
+        })
         session.setdefault("post_survey_answers", []).append(survey_data)
 
-        session["question_index"] = session.get("question_index", 0) + 1
-        if session["question_index"] >= len(questions):
+        session.pop("awaiting_post_survey", None)
+        session["question_index"] = position_0idx + 1
+        if session["question_index"] >= len(session["question_order"]):
             return redirect(url_for("main.final_survey"))
         return redirect(url_for("main.quiz"))
 
     return render_template("post_survey.html")
 
 
+FINAL_SURVEY_FIELDS = (
+    "blind_acceptance",
+    "questioned_recommendations",
+    "immediate_usage",
+    "verified_answers",
+    "reliable_advice",
+    "trustworthy_explanations",
+    "count_recommendations",
+    "depend_solving",
+    "recommendations_helpful",
+    "explanations_clear",
+    "appropriate_responses",
+    "quality_satisfaction",
+    "careful_consideration",
+    "knowledge_combination",
+    "own_decisions",
+    "critical_evaluation",
+    "independence",
+)
+
+
 @main_bp.route("/final_survey", methods=["GET", "POST"])
 def final_survey():
     if not session.get("participant_id"):
         return redirect(url_for("main.index"))
+    if not _all_trials_done():
+        # Reached before the last question was answered and rated (e.g. a
+        # typed URL); submitting here used to save the record as complete.
+        return redirect(_resume_url())
 
     if request.method == "POST":
-        survey_data = {
-            "blind_acceptance": request.form.get("blind_acceptance"),
-            "questioned_recommendations": request.form.get("questioned_recommendations"),
-            "immediate_usage": request.form.get("immediate_usage"),
-            "verified_answers": request.form.get("verified_answers"),
-            "reliable_advice": request.form.get("reliable_advice"),
-            "trustworthy_explanations": request.form.get("trustworthy_explanations"),
-            "count_recommendations": request.form.get("count_recommendations"),
-            "depend_solving": request.form.get("depend_solving"),
-            "recommendations_helpful": request.form.get("recommendations_helpful"),
-            "explanations_clear": request.form.get("explanations_clear"),
-            "appropriate_responses": request.form.get("appropriate_responses"),
-            "quality_satisfaction": request.form.get("quality_satisfaction"),
-            "careful_consideration": request.form.get("careful_consideration"),
-            "knowledge_combination": request.form.get("knowledge_combination"),
-            "own_decisions": request.form.get("own_decisions"),
-            "critical_evaluation": request.form.get("critical_evaluation"),
-            "independence": request.form.get("independence"),
-        }
+        survey_data = {name: request.form.get(name) for name in FINAL_SURVEY_FIELDS}
+        if not all(survey_data.values()):
+            return render_template(
+                "final_survey.html", error="Please answer every statement."
+            ), 400
         session["final_survey_answers"] = survey_data
 
         # Create an empty dictionary to hold all the data

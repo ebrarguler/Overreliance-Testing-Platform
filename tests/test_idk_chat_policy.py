@@ -268,6 +268,7 @@ def test_instructions_do_not_leak_into_a_later_non_idk_trial():
             sess["begin"] = 0
 
         c.get("/quiz")
+        c.get("/get_initial_recommendation")
         messages = _post_chat(c, "What does next() do?")
         assert IDK_PERSISTENT_INSTRUCTIONS in messages[0]["content"]
 
