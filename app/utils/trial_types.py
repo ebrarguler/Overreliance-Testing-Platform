@@ -93,6 +93,15 @@ def is_pending_review(variant) -> bool:
     return bool(variant) and variant.get("review_status") == REVIEW_PENDING
 
 
+def is_in_rotation(variant) -> bool:
+    """
+    False for an authored variant that is held out of rotation
+    (`in_rotation: False`): written and reviewable, but not yet served to
+    participants. Variants without the key are in rotation.
+    """
+    return bool(variant) and variant.get("in_rotation", True) is not False
+
+
 _DIGIT_RE = re.compile(r"\d")
 
 

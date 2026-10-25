@@ -22,7 +22,7 @@ from flask import Flask
 from app.routes import FINAL_SURVEY_FIELDS, main_bp
 from app.utils import assignment as assignment_module
 from app.utils.participants import PARTICIPANT_COOKIE
-from app.utils.questions import questions, get_chat_prompt
+from app.utils.questions import IDK_ABSTENTIONS, questions, get_chat_prompt
 from app.utils.sequences import (
     LEGACY_SEQUENCES,
     OPTION6_SEQUENCES,
@@ -94,6 +94,7 @@ def _run_study(client):
     sent = []
     state = _session(client)
     order, variants = state["question_order"], state["variant_assignments"]
+    idk_wordings = iter(state["idk_phrasing_order"])
 
     for position, q_idx in enumerate(order, start=1):
         variant = variants[str(q_idx)]
@@ -105,9 +106,13 @@ def _run_study(client):
         assert client.get("/quiz").get_data(as_text=True) == html
 
         rec = client.get("/get_initial_recommendation").get_json()
-        assert rec["recommendation"] == (
-            questions[q_idx]["variants"][variant]["initial_recommendation"]
-        )
+        if variant == I:
+            # The participant's next IDK wording, in their own order.
+            assert rec["recommendation"] == IDK_ABSTENTIONS[next(idk_wordings)]
+        else:
+            assert rec["recommendation"] == (
+                questions[q_idx]["variants"][variant]["initial_recommendation"]
+            )
 
         def reply(**kwargs):
             sent.append({"position": position, "q_idx": q_idx, "variant": variant, **kwargs})
@@ -189,6 +194,10 @@ def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, force
     assert probes == {4: {"P": "before_first_idk", "Q": "after_first_idk"}[label]}
     assert not any(t["is_primary_option6_probe"] for t in trials)
     assert [t["idk_encounter_number"] for t in trials if t["trial_type"] == I] == [1, 2, 3]
+    # Each of the three IDK wordings is shown once, in this participant's order.
+    idk_ids = [t["idk_phrasing_id"] for t in trials if t["trial_type"] == I]
+    assert idk_ids == state["idk_phrasing_order"] and sorted(idk_ids) == [0, 1, 2]
+    assert all(t["idk_phrasing_id"] is None for t in trials if t["trial_type"] != I)
 
     errored = trials[4]["chat"]
     assert errored["n_turns"] == 1 and errored["n_turns_attempted"] == 2

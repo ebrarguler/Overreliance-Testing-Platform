@@ -298,6 +298,7 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "first_submit_at": timestamps.get("first_submit_at", ""),
             "final_submit_at": timestamps.get("final_submit_at", ""),
             "dwell_time_s": record.get("dwell_time_s", ""),
+            "idk_phrasing_id": record.get("idk_phrasing_id"),
 
             "initial_answer": revisions.get("initial_answer", ""),
             "final_answer": revisions.get("final_answer", record.get("answer", "")),
@@ -557,6 +558,7 @@ TRIAL_FIELDS = [
     "first_submit_at",
     "final_submit_at",
     "dwell_time_s",
+    "idk_phrasing_id",
     "initial_answer",
     "final_answer",
     "n_changes",

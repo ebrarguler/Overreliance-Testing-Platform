@@ -293,7 +293,9 @@ def test_instructions_do_not_leak_into_a_later_non_idk_trial():
 # ---------------------------------------------------------------------------
 
 
-AUTHORED_IDK_INDICES = [8, 9, 10]
+# Every problem has an IDK variant (8-10 in rotation, the rest drafted and
+# held out until full randomization); the same hygiene rules apply to all.
+AUTHORED_IDK_INDICES = list(range(14))
 
 
 @pytest.mark.parametrize("question_index", AUTHORED_IDK_INDICES)

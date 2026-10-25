@@ -43,7 +43,7 @@ six-order S1-S6 table, both kept below) keep that assignment.
 import random
 from collections import Counter
 
-from .trial_types import TrialType, is_placeholder
+from .trial_types import TrialType, is_in_rotation, is_placeholder
 
 # Trial-type constants — values must match the variant keys in questions.py.
 C = TrialType.CORRECT.value
@@ -258,10 +258,12 @@ validate_sequences()
 
 def eligible_trial_types(question):
     """Trial types `question` can legitimately be rotated into right now —
-    i.e. every TrialType it has real (non-placeholder) content authored for."""
+    every TrialType it has real (non-placeholder) content authored for, and
+    that is not held out of rotation (trial_types.is_in_rotation)."""
     return {
         t for t in TrialType
         if not is_placeholder(question["variants"][t.value])
+        and is_in_rotation(question["variants"][t.value])
     }
 
 

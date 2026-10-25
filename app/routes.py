@@ -43,6 +43,8 @@ from .utils.measures import (
 )
 from .utils.questions import (
     questions,
+    IDK_ABSTENTIONS,
+    idk_phrasing_order,
     get_initial_recommendation,
     get_chat_prompt,
     post_survey_questions,
@@ -100,6 +102,22 @@ def _load_assignment(participant_id, site):
     # None for a legacy (S1..S6) assignment. Never shown to the participant
     # and never sent to the model.
     session["sequence_design_version"] = assignment["sequence_design_version"]
+    # Which IDK wording each IDK encounter uses; derived from the stored seed,
+    # so a resumed participant gets the same order.
+    session["idk_phrasing_order"] = idk_phrasing_order(assignment["seed"])
+
+
+def _current_idk_phrasing():
+    """Index into IDK_ABSTENTIONS for the current trial if it is an IDK
+    trial (its 1st, 2nd or 3rd IDK encounter picks from the participant's
+    order), else None."""
+    order = session["question_order"][: session["question_index"] + 1]
+    types = [session["variant_assignments"][str(q)] for q in order]
+    if types[-1] != "idk":
+        return None
+    encounter = types.count("idk")
+    phrasings = session.get("idk_phrasing_order") or list(range(len(IDK_ABSTENTIONS)))
+    return phrasings[(encounter - 1) % len(phrasings)]
 
 
 def _attach_participant(participant, next_url):
@@ -468,6 +486,9 @@ def quiz():
                     "final_submit_at": final_submit_at,
                 },
                 "dwell_time_s": session["elapsed_time"],
+                "idk_phrasing_id": (
+                    _initial_recommendation_entry(current_q_index) or {}
+                ).get("idk_phrasing_id"),
 
                 "answer_revisions": {
                     "initial_answer": initial_answer,
@@ -544,16 +565,21 @@ def initial_recommendation():
         return jsonify({"error": "No active question"}), 409
 
     current_q_index = session["question_order"][session["question_index"]]
+
+    # Already shown this trial (e.g. the page was reloaded): return the same
+    # text again without logging a second exposure.
+    shown = _initial_recommendation_entry(current_q_index)
+    if shown is not None:
+        return jsonify({"recommendation": shown["assistant_message"]})
+
     variant = session["variant_assignments"][str(current_q_index)]
-    recommendation = get_initial_recommendation(current_q_index, variant)
+    idk_phrasing = _current_idk_phrasing()
+    recommendation = get_initial_recommendation(
+        current_q_index, variant, idk_phrasing=idk_phrasing
+    )
     # Only the text goes to the browser. The full dict also carries the
     # trial type, which anyone could read in the network tab.
     payload = {"recommendation": recommendation["recommendation"]}
-
-    # Already shown this trial (e.g. the page was reloaded): return it again
-    # without logging a second exposure.
-    if _initial_recommendation_entry(current_q_index) is not None:
-        return jsonify(payload)
 
     user_message = "What's your recommended answer to this question?"
 
@@ -571,6 +597,8 @@ def initial_recommendation():
         "timestamp": datetime.datetime.utcnow().isoformat(),
         "user_message": user_message,
         "assistant_message": recommendation["recommendation"],
+        # Which IDK_ABSTENTIONS wording was shown; None on other trial types.
+        "idk_phrasing_id": idk_phrasing,
         "prompt_tokens": None,
         "completion_tokens": None,
         "total_tokens": None,

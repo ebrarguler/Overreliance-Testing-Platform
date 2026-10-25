@@ -44,10 +44,12 @@ def get_ai_endorsed_answer(question, variant):
 
       "correct"          → the question's ground-truth answer (AI always
                             recommends it)
-      "confident_wrong"  → found by checking which option string appears in
-                            the confident_wrong recommendation text; None if
-                            zero or more than one option matches (ambiguous —
-                            see docs/MEASURES.md's "known limitations" section)
+      "confident_wrong"  → the variant's stored `endorsed_answer` (checked
+                            against the options and the text when
+                            questions.py is imported). Without one, the
+                            option string found in the recommendation text;
+                            None if zero or more than one option matches
+                            (see docs/MEASURES.md section 6)
       "idk"              → None (no specific recommendation made — this is
                             the defining property of the condition, not a
                             data gap)
@@ -56,7 +58,10 @@ def get_ai_endorsed_answer(question, variant):
         return question["correct"]
     if variant == TrialType.IDK.value:
         return None
-    rec_text = question["variants"][TrialType.CONFIDENT_WRONG.value]["initial_recommendation"]
+    wrong_variant = question["variants"][TrialType.CONFIDENT_WRONG.value]
+    if wrong_variant.get("endorsed_answer") is not None:
+        return wrong_variant["endorsed_answer"]
+    rec_text = wrong_variant["initial_recommendation"]
     matches = [opt for opt in question["options"] if opt in rec_text]
     return matches[0] if len(matches) == 1 else None
 

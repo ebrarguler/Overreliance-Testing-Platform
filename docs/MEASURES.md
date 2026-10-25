@@ -157,6 +157,7 @@ Mongo document (indexed by problem id, not presentation position — see
 | `timestamps.first_submit_at` | ISO datetime or null | First answer-option selection (see §4 — this is *not* a server round-trip) |
 | `timestamps.final_submit_at` | ISO datetime | Server receipt time of the `POST /quiz` that ends the trial |
 | `dwell_time_s` | float | `final_submit_at - served_at`, server-clock (`app/routes.py`'s existing `elapsed_time`) |
+| `idk_phrasing_id` | int or null | On IDK trials, which wording of `questions.IDK_ABSTENTIONS` (0, 1, 2) opened the trial. Each participant gets the three in a random order, one per IDK encounter, reproducible from the assignment seed. Null on other trials; absent on older records, which all used wording 0 |
 | `answer_revisions.initial_answer` | str | First option selected |
 | `answer_revisions.final_answer` | str | Same as `answer` |
 | `answer_revisions.n_changes` | int | Count of selection changes *after* the first (see §4) |
@@ -352,31 +353,34 @@ across designs: legacy `S1`/`S2` are not Option 6 `A`/`B`, which are not
 
 ---
 
-## 6. Known limitation: ambiguous `confident_wrong` answer extraction
+## 6. The endorsed answer of a `confident_wrong` trial
 
-`get_ai_endorsed_answer` finds the endorsed answer for a `confident_wrong`
-trial by checking which of the question's option strings appears as a
-substring of the recommendation text. If zero or more than one option
-matches, it returns `None` (→ `reliance_code = NOT_APPLICABLE`), rather than
-guessing. This is a text-matching heuristic, not a stored fact — if a
-recommendation is ever rewritten to not clearly reference exactly one
-option, this will silently start returning `None` for that question. Check
-`scripts/export_data.py`'s export summary (or query for
-`trial_type == "confident_wrong" AND ai_endorsed_answer IS null`) after
-authoring or editing any `confident_wrong` variant text.
+Every `confident_wrong` variant stores the option it recommends as
+`endorsed_answer` (`app/utils/questions.py`), and `get_ai_endorsed_answer`
+returns it. When `questions.py` is imported, each stored answer is checked to
+be one of the options, not the correct one, and stated in the recommendation
+text; a mismatch stops the app from starting.
+
+Older code guessed the endorsed answer by checking which option string
+appears in the recommendation text, returning `None` (→ `reliance_code =
+NOT_APPLICABLE`) when zero or several options matched. That text match is
+kept only as a fallback for a variant without `endorsed_answer`. The stored
+answers equal what the text match gave for the six original wrong variants,
+so records written before this change are coded the same way.
 
 ---
 
 ### 6.1 Known limitation: rotation is only within trial type
 
-Rotation draws each type from problems with an authored, non-`TODO` variant
-of that type. In the current question bank:
+Every problem now has all three variants written, but the 25 new drafts
+carry `in_rotation: False` and are not served yet. Rotation therefore still
+draws from the original split:
 
-| Problems | Authored variants |
+| Problems | Variants in rotation |
 |---|---|
-| 0–7 | `correct` only |
+| 0–7 | `correct` |
 | 8–10 | `confident_wrong`, `idk` (IDK wording marked `pending_final_review`) |
-| 11–13 | `confident_wrong` only |
+| 11–13 | `confident_wrong` |
 
 Each order needs 8 C, 3 W and 3 I, and IDK is filled first, so every
 participant sees problems 0–7 as `correct`, 8–10 as `idk` and 11–13 as
@@ -385,9 +389,8 @@ appears at W positions 4, 7 and 13 across participants, and no W problem is
 tied to one probe context. But problem identity is fully confounded with
 trial type: `confident_wrong` reliance is measured only on problems 11–13
 and IDK behaviour only on 8–10. The study team has decided to remove that
-confound by authoring all three variants for every problem and rotating
-every problem across all three types; until those variants exist, this
-limitation applies.
+confound by randomizing every problem across all three types; this
+limitation applies until that is switched on.
 
 ---
 
