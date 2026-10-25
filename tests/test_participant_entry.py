@@ -169,7 +169,9 @@ def test_no_personal_data_is_stored_for_uzh(client, db):
 
 def test_same_browser_resumes_where_it_left_off(client, db):
     _enter(client)
-    client.post("/demographics", data={"age": "18-24"})
+    client.post(
+        "/demographics", data={"age": "21", "study_level": "ba2", "gpa": "5.0-5.49"}
+    )
     with client.session_transaction() as sess:
         first = (sess["participant_id"], sess["question_order"])
 

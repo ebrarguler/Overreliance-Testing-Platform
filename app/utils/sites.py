@@ -21,6 +21,8 @@ SITES = {
         # UZH collects no personal data: no email, name or student ID.
         "start_template": "index.html",
         "collects_identity": False,
+        # Swiss 1-6 grades (app.utils.demographics.GRADE_SCALES).
+        "grade_scale": "ch_6",
         "research_note": (
             "This research study is conducted by Ebrar Karadeniz in the Social "
             "Computing Group at the Department of Informatics, University of "
@@ -38,6 +40,7 @@ SITES = {
         "start_template": "start_uf.html",
         "collects_identity": True,
         "email_domain": "ufl.edu",
+        "grade_scale": "us_gpa_4",
         "research_note": (
             "This is a research study from the Emerging Technologies in "
             "Education Group under the supervision of Dr. Neha Rani. IRB "

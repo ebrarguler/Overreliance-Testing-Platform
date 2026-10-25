@@ -48,7 +48,7 @@ from .utils.questions import (
     post_survey_questions,
     final_survey_questions,
 )
-from .utils.demographics import demographics_questions
+from .utils.demographics import GRADE_SCALES, STUDY_LEVEL_OPTIONS
 from .utils.pre_survey import (
     PRE_SURVEY_PAGES,
     page_field_names,
@@ -285,9 +285,34 @@ def collect_consent():
     )
 
 
+def _render_demographics(site, error=None):
+    return render_template(
+        "demographics.html",
+        study_levels=STUDY_LEVEL_OPTIONS,
+        grade_scale=GRADE_SCALES[site["grade_scale"]],
+        error=error,
+    )
+
+
 @main_bp.route("/demographics", methods=["GET", "POST"])
 def collect_demographics():
+    site = get_site(session.get("site"))
+    if site is None:
+        return redirect(url_for("main.index"))
+
     if request.method == "POST":
+        study_level = request.form.get("study_level")
+        gpa = request.form.get("gpa")
+        # Grade bands differ by site, so check the answer belongs to this
+        # site's scale before storing it under that scale.
+        if (
+            study_level not in STUDY_LEVEL_OPTIONS
+            or gpa not in GRADE_SCALES[site["grade_scale"]]["options"]
+        ):
+            return _render_demographics(
+                site, error="Please choose your level of study and your grade range."
+            ), 400
+
         demographics_data = {
             "age_category": request.form.get("age"),
             "gender": request.form.get("gender"),
@@ -295,15 +320,16 @@ def collect_demographics():
             "ai_usage": request.form.get("ai_experience"),
             "ai_frequency": request.form.get("ai_frequency"),
             "ai_use_type": request.form.getlist("ai_use_type"),
-            "academic_level": request.form.get("year"),
+            "academic_level": study_level,
             "major_category": request.form.get("major"),
             "minor_category": request.form.get("minor"),
-            "gpa": request.form.get("gpa"),
+            "gpa": gpa,
+            "gpa_scale": site["grade_scale"],
         }
         session["demographics"] = demographics_data
         return redirect(url_for("main.pre_survey"))
 
-    return render_template("demographics.html")
+    return _render_demographics(site)
 
 
 def _form_count(name):

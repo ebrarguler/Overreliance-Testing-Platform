@@ -22,15 +22,12 @@
           </div>
 
           <div class="form-field">
-            <label>Year in College</label>
-            <select name="year" required>
-              <option value="">Select year</option>
-              <option value="1">First Year</option>
-              <option value="2">Second Year</option>
-              <option value="3">Third Year</option>
-              <option value="4">Fourth Year</option>
-              <option value="5">Fifth Year</option>
-              <option value="grad">Graduate Student</option>
+            <label for="study_level">Current level of study</label>
+            <select id="study_level" name="study_level" required>
+              <option value="">Select level of study</option>
+              {% for value, label in study_levels.items() %}
+              <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
             </select>
           </div>
         </div>
@@ -48,16 +45,12 @@
           </div>
 
           <div class="form-field">
-            <label>Current GPA</label>
-            <select name="gpa" required>
-              <option value="">Select GPA range</option>
-              <option value="4.0">3.75 - 4.00</option>
-              <option value="3.75">3.50 - 3.74</option>
-              <option value="3.5">3.25 - 3.49</option>
-              <option value="3.25">3.00 - 3.24</option>
-              <option value="3.0">2.50 - 2.99</option>
-              <option value="2.5">Below 2.50</option>
-              <option value="none">Prefer not to disclose</option>
+            <label for="gpa">{{ grade_scale.label }}</label>
+            <select id="gpa" name="gpa" required>
+              <option value="">{{ grade_scale.placeholder }}</option>
+              {% for value, label in grade_scale.options.items() %}
+              <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
             </select>
           </div>
         </div>
@@ -256,6 +249,9 @@
       </div>
     </div>
 
+    {% if error %}
+    <p class="form-error">{{ error }}</p>
+    {% endif %}
     <button type="submit" class="btn">Continue</button>
   </form>
 </div>
