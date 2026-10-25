@@ -7,24 +7,22 @@ mapping: which concrete question fills each "C"/"W"/"I" slot is rotated per
 participant (seeded), so a given question is not always shown at the same
 position, decoupling question identity from position.
 
-Active design: Option 6 (SEQUENCE_DESIGN_VERSION = "option6_v1")
-------------------------------------------------------------------
-Two orders, 14 positions each, 8 C / 3 W / 3 I. Positions are numbered 1-14
-in the comments and in OPTION6_* constants below; the lists are 0-indexed.
+Active design: blocks with a mirrored first block
+(SEQUENCE_DESIGN_VERSION = "blocks_pq_v1")
+-------------------------------------------------------------------
+Two orders, 14 positions in three blocks of 5, 5 and 4. Every block holds
+exactly one W and one IDK; the rest are C. Positions are numbered 1-14 in
+the comments and constants below; the lists are 0-indexed.
 
-    Position:  1  2  3  4  5  6  7  8  9 10 11 12 13 14
-    Order A:   C  C  W  I  C  C  I  W  C  C  I  C  W  C
-    Order B:   C  C  W  I  C  I  C  W  C  C  C  I  W  C
+    Position:  1  2  3  4  5 | 6  7  8  9 10 | 11 12 13 14
+    Order P:   C  C  C  W  I | C  W  C  I  C |  C  I  W  C
+    Order Q:   C  C  I  W  C | C  W  C  I  C |  C  I  W  C
 
-The primary comparison is between the W trials at positions 8 and 13:
-    A8  = immediately after IDK          (I -> W)
-    A13 = one correct trial between      (I -> C -> W)
-    B8  = one correct trial between      (I -> C -> W)
-    B13 = immediately after IDK          (I -> W)
-so every participant experiences both arrangements once. Position 3 is a
-shared pre-IDK W observation and is NOT part of the primary comparison.
-This design tests recent IDK placement; it is not a comparison of IDK
-exposure against no IDK exposure, and it is not a balanced Latin square.
+The orders differ only at positions 3 and 5. Position 4 is the first W for
+everyone: in P it comes before any IDK, in Q right after the first IDK. That
+W is the primary probe for IDK spillover (H4): same position, same rotated
+problem pool, same number of earlier W trials, only prior IDK exposure
+differs. From position 6 on, both orders are identical.
 
 To change the trial-type design:
   - Edit SEQUENCES / SEQUENCE_LABELS and bump SEQUENCE_DESIGN_VERSION, so
@@ -35,11 +33,11 @@ To change the trial-type design:
 To change problem rotation:
   - Toggle ROTATE_PROBLEMS (False fixes problem order for e.g. a pilot).
 
-Sequence assignment (which participant gets A or B) and the realized,
-seeded problem rotation live in app.utils.assignment, which persists the
-result per participant and reuses it on resume rather than reassigning.
-Participants assigned under the earlier six-order design (LEGACY_SEQUENCES)
-keep that assignment.
+Sequence assignment (which participant gets P or Q, balanced per site) and
+the realized, seeded problem rotation live in app.utils.assignment, which
+persists the result per participant and reuses it on resume rather than
+reassigning. Participants assigned under an earlier design (Option 6 or the
+six-order S1-S6 table, both kept below) keep that assignment.
 """
 
 import random
@@ -56,38 +54,54 @@ I = TrialType.IDK.value
 # Config — edit here only.
 # ---------------------------------------------------------------------------
 
-SEQUENCE_DESIGN_VERSION = "option6_v1"
+SEQUENCE_DESIGN_VERSION = "blocks_pq_v1"
 
 SEQUENCES = [
-    # 1  2  3  4  5  6  7  8  9 10 11 12 13 14
-    [C, C, W, I, C, C, I, W, C, C, I, C, W, C],  # A
-    [C, C, W, I, C, I, C, W, C, C, C, I, W, C],  # B
+    # 1  2  3  4  5    6  7  8  9 10   11 12 13 14
+    [C, C, C, W, I,   C, W, C, I, C,   C, I, W, C],  # P
+    [C, C, I, W, C,   C, W, C, I, C,   C, I, W, C],  # Q
 ]
 
-SEQUENCE_LABELS = ["A", "B"]
+SEQUENCE_LABELS = ["P", "Q"]
 
-# Descriptive only (stored per trial as `section`): positions 1-5, 6-10,
-# 11-14, as 0-indexed half-open (start, end) pairs. Not a design constraint.
+# The three blocks (positions 1-5, 6-10, 11-14), as 0-indexed half-open
+# (start, end) pairs. Stored per trial as `section` (early/middle/late).
 SECTION_BOUNDARIES = [(0, 5), (5, 10), (10, 14)]
 
-# Required exact per-sequence counts.
+# Required exact per-sequence counts, and per block.
 REQUIRED_TYPE_COUNTS = {C: 8, W: 3, I: 3}
+REQUIRED_PER_BLOCK = {W: 1, I: 1}
 
-# Option 6 structure, 1-indexed presentation positions.
-OPTION6_N_ORDERS = 2
-OPTION6_N_POSITIONS = 14
-OPTION6_W_POSITIONS = (3, 8, 13)
+N_ORDERS = 2
+N_POSITIONS = 14
+# Every order opens with this many C trials, so the assistant is seen to be
+# right before it is ever wrong or unsure.
+N_LEADING_C = 2
+
+# The primary probe: the first W, at the same position in every order.
+PQ_PROBE_POSITION = 4
+PQ_BEFORE_IDK = "before_first_idk"   # order P
+PQ_AFTER_IDK = "after_first_idk"     # order Q
+
+# ---------------------------------------------------------------------------
+# Earlier designs, kept so existing assignments are read and labelled
+# correctly. Never used for new allocations.
+# ---------------------------------------------------------------------------
+
+# Option 6 (sequence_design_version "option6_v1"). Its primary probes were
+# the W trials at positions 8 and 13: immediately after an IDK vs. one C
+# trial between.
+OPTION6_DESIGN_VERSION = "option6_v1"
+OPTION6_SEQUENCES = {
+    "A": [C, C, W, I, C, C, I, W, C, C, I, C, W, C],
+    "B": [C, C, W, I, C, I, C, W, C, C, C, I, W, C],
+}
 OPTION6_PRIMARY_PROBE_POSITIONS = (8, 13)
-OPTION6_FIRST_IDK_POSITION = 4
-# Number of IDK trials strictly before each primary probe position.
-OPTION6_PRIOR_IDKS_AT_PROBE = {8: 2, 13: 3}
 
 PROBE_IMMEDIATE = "immediate_after_idk"      # I -> W
 PROBE_ONE_BETWEEN = "one_correct_between"    # I -> C -> W
 
-# The six-order design used before Option 6. Kept as a historical record so
-# legacy assignments (sequence_design_version absent) can be read; never
-# used for new allocations.
+# The six-order design used before Option 6 (no sequence_design_version).
 LEGACY_SEQUENCES = {
     "S1": [C, W, C, I, C, C, W, C, I, C, W, C, I, C],
     "S2": [C, I, C, W, C, C, I, C, W, C, I, C, W, C],
@@ -107,12 +121,23 @@ ROTATE_PROBLEMS = True
 # ---------------------------------------------------------------------------
 
 
+def pq_probe_context(types, position_1idx):
+    """
+    For a W trial: PQ_AFTER_IDK if any IDK came before it, else
+    PQ_BEFORE_IDK. None for any non-W trial.
+    """
+    idx = position_1idx - 1
+    if types[idx] != W:
+        return None
+    return PQ_AFTER_IDK if I in types[:idx] else PQ_BEFORE_IDK
+
+
 def probe_context(types, position_1idx):
     """
-    How the W trial at `position_1idx` relates to the most recent IDK:
-    PROBE_IMMEDIATE if the previous trial is IDK, PROBE_ONE_BETWEEN if the
-    previous trial is C and the one before it is IDK, otherwise None.
-    Returns None for any non-W trial.
+    Option 6 only. How the W trial at `position_1idx` relates to the most
+    recent IDK: PROBE_IMMEDIATE if the previous trial is IDK,
+    PROBE_ONE_BETWEEN if the previous trial is C and the one before it is
+    IDK, otherwise None. Returns None for any non-W trial.
     """
     idx = position_1idx - 1
     if types[idx] != W:
@@ -133,8 +158,8 @@ _VALID_TYPES = {t.value for t in TrialType}
 
 def validate_sequences():
     """
-    Check that SEQUENCES matches the Option 6 design spec. Raises ValueError,
-    listing every violation found (not just the first).
+    Check that SEQUENCES matches the blocks_pq design spec. Raises
+    ValueError, listing every violation found (not just the first).
     """
     issues = []
 
@@ -143,17 +168,14 @@ def validate_sequences():
             f"SEQUENCES has {len(SEQUENCES)} entries but "
             f"SEQUENCE_LABELS has {len(SEQUENCE_LABELS)}"
         )
-    if len(SEQUENCES) != OPTION6_N_ORDERS:
-        issues.append(
-            f"expected exactly {OPTION6_N_ORDERS} active orders, got {len(SEQUENCES)}"
-        )
+    if len(SEQUENCES) != N_ORDERS:
+        issues.append(f"expected exactly {N_ORDERS} active orders, got {len(SEQUENCES)}")
     if len(set(SEQUENCE_LABELS)) != len(SEQUENCE_LABELS):
         issues.append(f"SEQUENCE_LABELS are not unique: {SEQUENCE_LABELS}")
     if len({tuple(s) for s in SEQUENCES}) != len(SEQUENCES):
         issues.append("two active orders are identical")
 
-    contexts_required = {PROBE_IMMEDIATE, PROBE_ONE_BETWEEN}
-
+    well_formed = []
     for label, seq in zip(SEQUENCE_LABELS, SEQUENCES):
         bad_types = [
             (pos, t) for pos, t in enumerate(seq, start=1) if t not in _VALID_TYPES
@@ -163,13 +185,12 @@ def validate_sequences():
                 f"{label} position {pos}: unknown trial type {t!r}; "
                 f"allowed values are {sorted(_VALID_TYPES)}"
             )
-        if len(seq) != OPTION6_N_POSITIONS:
-            issues.append(
-                f"{label} has {len(seq)} positions, expected {OPTION6_N_POSITIONS}"
-            )
+        if len(seq) != N_POSITIONS:
+            issues.append(f"{label} has {len(seq)} positions, expected {N_POSITIONS}")
             continue  # positional checks below assume the full length
         if bad_types:
             continue
+        well_formed.append((label, seq))
 
         counts = Counter(seq)
         for trial_type, required in REQUIRED_TYPE_COUNTS.items():
@@ -183,35 +204,40 @@ def validate_sequences():
             if seq[pos - 1] == I and seq[pos - 2] == I:
                 issues.append(f"{label} has consecutive IDKs at positions {pos - 1}-{pos}")
 
-        w_positions = tuple(p for p, t in enumerate(seq, start=1) if t == W)
-        if w_positions != OPTION6_W_POSITIONS:
+        if any(t != C for t in seq[:N_LEADING_C]):
+            issues.append(f"{label} does not open with {N_LEADING_C} C trials")
+
+        for block_no, (start, end) in enumerate(SECTION_BOUNDARIES, start=1):
+            block = Counter(seq[start:end])
+            for trial_type, required in REQUIRED_PER_BLOCK.items():
+                if block.get(trial_type, 0) != required:
+                    issues.append(
+                        f"{label} block {block_no} (positions {start + 1}-{end}) has "
+                        f"{block.get(trial_type, 0)} {trial_type!r}, expected {required}"
+                    )
+
+        first_w = next((p for p, t in enumerate(seq, start=1) if t == W), None)
+        if first_w != PQ_PROBE_POSITION:
             issues.append(
-                f"{label} has W at positions {list(w_positions)}, expected "
-                f"{list(OPTION6_W_POSITIONS)}"
+                f"{label} first W is at position {first_w}, expected {PQ_PROBE_POSITION}"
             )
 
-        idk_positions = [p for p, t in enumerate(seq, start=1) if t == I]
-        if not idk_positions or idk_positions[0] != OPTION6_FIRST_IDK_POSITION:
+    if len(well_formed) == len(SEQUENCES) == N_ORDERS:
+        w_positions = {
+            tuple(p for p, t in enumerate(seq, start=1) if t == W) for _, seq in well_formed
+        }
+        if len(w_positions) != 1:
+            issues.append(f"W positions differ between orders: {sorted(w_positions)}")
+        block_end = SECTION_BOUNDARIES[0][1]
+        if len({tuple(seq[block_end:]) for _, seq in well_formed}) != 1:
+            issues.append(f"orders differ after block 1 (position {block_end})")
+        contexts = sorted(
+            pq_probe_context(seq, PQ_PROBE_POSITION) or "" for _, seq in well_formed
+        )
+        if contexts != sorted([PQ_BEFORE_IDK, PQ_AFTER_IDK]):
             issues.append(
-                f"{label} first IDK is at position "
-                f"{idk_positions[0] if idk_positions else None}, expected "
-                f"{OPTION6_FIRST_IDK_POSITION}"
-            )
-
-        for probe_pos, required in OPTION6_PRIOR_IDKS_AT_PROBE.items():
-            prior = sum(1 for t in seq[: probe_pos - 1] if t == I)
-            if prior != required:
-                issues.append(
-                    f"{label} has {prior} IDK(s) before position {probe_pos}, "
-                    f"expected {required}"
-                )
-
-        contexts = [probe_context(seq, p) for p in OPTION6_PRIMARY_PROBE_POSITIONS]
-        if sorted(c or "" for c in contexts) != sorted(contexts_required):
-            issues.append(
-                f"{label} primary probes at positions "
-                f"{list(OPTION6_PRIMARY_PROBE_POSITIONS)} have contexts {contexts}; "
-                f"expected exactly one {PROBE_IMMEDIATE!r} and one {PROBE_ONE_BETWEEN!r}"
+                f"the W at position {PQ_PROBE_POSITION} has contexts {contexts}; expected "
+                f"one order {PQ_BEFORE_IDK!r} and one {PQ_AFTER_IDK!r}"
             )
 
     if issues:

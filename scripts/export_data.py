@@ -7,6 +7,7 @@ Usage
     # from the project root:
     python scripts/export_data.py
     python scripts/export_data.py --output-dir path/to/dir
+    python scripts/export_data.py --design blocks_pq_v1   # current P/Q design only
     python scripts/export_data.py --design option6_v1     # Option 6 only
     python scripts/export_data.py --design legacy_unversioned
 
@@ -39,11 +40,12 @@ aggregates.json   — sample-level metrics from docs/MEASURES.md §8, with
 
 Designs
 -------
-`sequence_design_version` is exported exactly as stored: "option6_v1" for
-Option 6 records, blank for records made before design versioning (the
-six-order S1-S6 design). `design_group` is the same value with blanks shown
-as "legacy_unversioned", so the two can be filtered and summarised apart.
---design restricts every output file to one design_group.
+`sequence_design_version` is exported exactly as stored: "blocks_pq_v1"
+for the current P/Q design, "option6_v1" for Option 6 records, blank for
+records made before design versioning (the six-order S1-S6 design).
+`design_group` is the same value with blanks shown as "legacy_unversioned",
+so the designs can be filtered and summarised apart. --design restricts
+every output file to one design_group.
 
 Privacy
 -------
@@ -81,7 +83,7 @@ load_dotenv(find_dotenv())
 
 from app.utils.db import init_db  # noqa: E402
 
-OPTION6_DESIGN = "option6_v1"
+PQ_DESIGN = "blocks_pq_v1"
 LEGACY_DESIGN_GROUP = "legacy_unversioned"
 
 # ---------------------------------------------------------------------------
@@ -316,6 +318,8 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "is_post_idk_cw": covariates.get("is_post_idk_cw", ""),
 
             "idk_encounter_number": record.get("idk_encounter_number", ""),
+            "is_primary_pq_probe": record.get("is_primary_pq_probe", ""),
+            "pq_probe_context": record.get("pq_probe_context", ""),
             "is_primary_option6_probe": record.get("is_primary_option6_probe", ""),
             "option6_probe_context": record.get("option6_probe_context", ""),
 
@@ -463,19 +467,35 @@ def compute_aggregates(all_trial_rows: list[dict]) -> dict:
         endorsed, lambda r: r.get("aligned_with_ai") is True
     )
 
-    # §5 — is_post_idk_cw incidence. Under the legacy S1-S6 table this is
-    # structurally 0; under Option 6 it is exactly one trial per participant
-    # (A8 / B13). Anything else means the computation or the data is off.
+    # §5 — is_post_idk_cw incidence. Fixed by each design's table: 0 for
+    # legacy S1-S6, one per participant for Option 6 (A8 / B13), and for
+    # blocks_pq one in order P (13) and two in order Q (4, 13). Anything
+    # else means the computation or the data is off.
     is_post_idk_cw_count = sum(1 for r in all_trial_rows if r.get("is_post_idk_cw") is True)
     aggregates["is_post_idk_cw_incidence"] = {
         "count": is_post_idk_cw_count,
         "note": (
-            "Expected 0 for legacy_unversioned (S1-S6) and one per "
-            "participant for option6_v1 — see docs/MEASURES.md section 5."
+            "Expected 0 for legacy_unversioned (S1-S6), one per participant "
+            "for option6_v1, and one per P / two per Q participant for "
+            "blocks_pq_v1 — see docs/MEASURES.md section 5."
         ),
     }
 
-    # §8.7 — Option 6 primary probes (W at positions 8 and 13), by context.
+    # §8.7 — blocks_pq primary probe (the first W, position 4), by whether
+    # an IDK came before it. Present only when such trials exist.
+    pq_probes = [r for r in all_trial_rows if r.get("is_primary_pq_probe") is True]
+    if pq_probes:
+        by_context = {}
+        for context in ("before_first_idk", "after_first_idk"):
+            rows = [r for r in pq_probes if r.get("pq_probe_context") == context]
+            by_context[context] = {
+                "n_trials": len(rows),
+                "reliance_rate": named_rate(rows, lambda r: r["reliance_code"] == "ACCEPTED"),
+                "accuracy": named_rate(rows, lambda r: r["is_correct"] is True),
+            }
+        aggregates["pq_primary_probe"] = by_context
+
+    # §8.8 — Option 6 primary probes (W at positions 8 and 13), by context.
     # Present only when such trials exist (i.e. option6_v1 records).
     probes = [r for r in all_trial_rows if r.get("is_primary_option6_probe") is True]
     if probes:
@@ -552,6 +572,8 @@ TRIAL_FIELDS = [
     "preceding_trial_type",
     "is_post_idk_cw",
     "idk_encounter_number",
+    "is_primary_pq_probe",
+    "pq_probe_context",
     "is_primary_option6_probe",
     "option6_probe_context",
     "confidence_rating",
@@ -680,7 +702,7 @@ def main() -> None:
         default=None,
         metavar="GROUP",
         help=(
-            f"Export only one design_group, e.g. {OPTION6_DESIGN} or "
+            f"Export only one design_group, e.g. {PQ_DESIGN} or "
             f"{LEGACY_DESIGN_GROUP} (default: all, summarised separately)"
         ),
     )

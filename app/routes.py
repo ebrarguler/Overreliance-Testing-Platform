@@ -92,8 +92,8 @@ def _reset_session(site_key):
     session["start_time"] = 0
 
 
-def _load_assignment(participant_id):
-    assignment = get_or_create_assignment(participant_id, questions)
+def _load_assignment(participant_id, site):
+    assignment = get_or_create_assignment(participant_id, questions, site)
     session["question_order"] = assignment["question_order"]
     session["variant_assignments"] = assignment["variant_assignments"]
     session["sequence_label"] = assignment["sequence_label"]
@@ -110,7 +110,7 @@ def _attach_participant(participant, next_url):
     session["participant_id"] = participant["participant_id"]
     session["prior_participation"] = participant["prior_participation"]
     session["consented"] = True
-    _load_assignment(participant["participant_id"])
+    _load_assignment(participant["participant_id"], participant["site"])
 
     response = make_response(redirect(next_url))
     response.set_cookie(

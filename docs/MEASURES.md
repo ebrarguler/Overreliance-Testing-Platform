@@ -8,11 +8,12 @@ aggregate metric computed from trial data, under the three-trial-type design
 document and the code ever disagree, that's a bug — fix one to match the
 other, don't just pick whichever seems more convenient.
 
-**Two sequence designs exist in the data.** Records from the earlier
-six-order design (S1–S6) have no `sequence_design_version`; records from the
-current Option 6 design have `sequence_design_version = "option6_v1"`. They
-differ in what `is_post_idk_cw` can be (§5) and in which trials are primary
-probes (§5.1). Analyse them separately; the export never pools them (§8).
+**Three sequence designs exist in the data.** Records from the six-order
+design (S1–S6) have no `sequence_design_version`; Option 6 records have
+`sequence_design_version = "option6_v1"`; records from the current block
+design have `"blocks_pq_v1"`. They differ in what `is_post_idk_cw` can be
+(§5) and in which trials are primary probes (§5). Analyse them separately;
+the export never pools them (§8.9).
 
 ---
 
@@ -26,7 +27,27 @@ from problems with an authored variant of that type. In principle the same
 problem can be `correct` for one participant and `confident_wrong` for
 another; with the variants currently authored it cannot (see §6.1).
 
-### 1.1 Option 6 orders (`sequence_design_version = "option6_v1"`)
+### 1.1 Block design, orders P and Q (`sequence_design_version = "blocks_pq_v1"`, current)
+
+```
+Position:  1  2  3  4  5 | 6  7  8  9 10 | 11 12 13 14
+Order P:   C  C  C  W  I | C  W  C  I  C |  C  I  W  C
+Order Q:   C  C  I  W  C | C  W  C  I  C |  C  I  W  C
+```
+
+Three blocks of 5, 5 and 4 positions, each with exactly one `confident_wrong`
+and one `idk` trial. Both orders open with two `correct` trials and are
+identical from position 6 on; they differ only at positions 3 and 5. New
+participants are allocated to P or Q, whichever has fewer assignments at
+their site (random when tied), so each site is balanced on its own.
+
+The primary probe is the W at position 4, the first W for everyone: in P it
+comes before any IDK, in Q immediately after the first IDK. It tests IDK
+spillover (H4) at a matched position, with the same rotated problem pool
+and the same number of earlier W trials. Each participant contributes one
+probe trial, so this is a between-participant comparison (§8.7).
+
+### 1.2 Option 6 orders (`sequence_design_version = "option6_v1"`, earlier)
 
 ```
 Position:  1  2  3  4  5  6  7  8  9 10 11 12 13 14
@@ -34,7 +55,7 @@ Order A:   C  C  W  I  C  C  I  W  C  C  I  C  W  C
 Order B:   C  C  W  I  C  I  C  W  C  C  C  I  W  C
 ```
 
-New participants are allocated to A or B, whichever has fewer assignments
+Participants were allocated to A or B, whichever had fewer assignments
 (random when tied). The primary comparison is between the `confident_wrong`
 trials at positions 8 and 13: in A, position 8 directly follows an IDK and
 position 13 has one correct trial in between; in B it is the other way round.
@@ -46,10 +67,15 @@ arrangement are counterbalanced only across the two orders. Position 3 is a
 shared `confident_wrong` trial before any IDK and is not part of the primary
 comparison.
 
-### 1.2 Legacy S1–S6 orders (no `sequence_design_version`)
+Option 6 is kept in `sequences.OPTION6_SEQUENCES`; its participants keep
+their order on resume and keep the Option 6 probe labels.
+
+### 1.3 Legacy S1–S6 orders (no `sequence_design_version`)
 
 Six orders, listed in `sequences.LEGACY_SEQUENCES`. Participants assigned
-one of them keep it on resume; they are never reassigned to A/B.
+one of them keep it on resume; they are never reassigned.
+
+### Trial types
 
 - **`correct`**: the AI's recommendation states the ground-truth answer.
 - **`confident_wrong`**: the AI's recommendation confidently states a
@@ -114,10 +140,10 @@ Mongo document (indexed by problem id, not presentation position — see
 | Field | Type | Notes |
 |---|---|---|
 | `participant_id` | str (uuid4) | Stable, non-PII id from `participant_assignments`. Use this to join across tables — never join on email. |
-| `sequence_id` | str | Assigned order: `"A"`/`"B"` (Option 6) or `"S1"`…`"S6"` (legacy) |
-| `sequence_design_version` | str or null | `"option6_v1"`; null/absent for legacy records |
+| `sequence_id` | str | Assigned order: `"P"`/`"Q"` (blocks_pq), `"A"`/`"B"` (Option 6) or `"S1"`…`"S6"` (legacy) |
+| `sequence_design_version` | str or null | `"blocks_pq_v1"` or `"option6_v1"`; null/absent for legacy records |
 | `position` | int, 1–14 | Presentation position |
-| `section` | `early`\|`middle`\|`late` | Positions 1–5 / 6–10 / 11–14, from `sequences.SECTION_BOUNDARIES` |
+| `section` | `early`\|`middle`\|`late` | Positions 1–5 / 6–10 / 11–14, from `sequences.SECTION_BOUNDARIES`; the three blocks under blocks_pq |
 | `problem_id` | int | Stable question id, independent of position |
 | `trial_type` | `correct`\|`confident_wrong`\|`idk` | The variant actually shown. Use this, not `response_type` (the problem's default category in `questions.py`, kept for backward compatibility) |
 | `answer` | str | Final answer (alias: `answer_revisions.final_answer`) |
@@ -142,6 +168,8 @@ Mongo document (indexed by problem id, not presentation position — see
 | `clipboard.pasted_chars` | int | Total characters pasted into the chat box. Same caveats |
 | `covariates.*` | — | See §4.2 |
 | `idk_encounter_number` | int or null | 1, 2, 3 on IDK trials (the n-th IDK this participant has seen); null on other trials. Absent on records written before this field existed |
+| `is_primary_pq_probe` | bool | True only for the `confident_wrong` trial at position 4 when `sequence_design_version == "blocks_pq_v1"`. Absent on older records |
+| `pq_probe_context` | str or null | `"before_first_idk"` (order P) or `"after_first_idk"` (order Q) on that probe; null otherwise. Absent on older records |
 | `is_primary_option6_probe` | bool | True only for `confident_wrong` trials at positions 8 and 13 when `sequence_design_version == "option6_v1"`. Absent on older records |
 | `option6_probe_context` | str or null | `"immediate_after_idk"` or `"one_correct_between"` on primary probes; null otherwise. Absent on older records |
 | `confidence_rating` | str or null | Only populated when `ENABLE_TRIAL_CONFIDENCE_RATING=true`; null otherwise (default) — see §7 |
@@ -196,6 +224,11 @@ from the participant's saved assignment (its type-at-position vector and
 
 ```
 idk_encounter_number     = n_idk_seen_so_far + 1     if trial_type at p == idk, else null
+is_primary_pq_probe      = design == blocks_pq_v1 AND p == 4
+                            AND trial_type at p == confident_wrong
+pq_probe_context         = "after_first_idk"  if primary and any idk before p
+                           "before_first_idk" if primary and no idk before p
+                           null               otherwise
 is_primary_option6_probe = design == option6_v1 AND p in {8, 13}
                             AND trial_type at p == confident_wrong
 option6_probe_context    = "immediate_after_idk"  if primary and type at p-1 == idk
@@ -206,9 +239,10 @@ option6_probe_context    = "immediate_after_idk"  if primary and type at p-1 == 
 ### 4.3 Sections
 
 `early` = positions 1–5, `middle` = 6–10, `late` = 11–14
-(`sequences.SECTION_BOUNDARIES`). Descriptive only: under Option 6 the
-sections are not a design constraint. Don't hardcode a second copy of these
-boundaries anywhere.
+(`sequences.SECTION_BOUNDARIES`). Under blocks_pq these are the three
+blocks, each holding one W and one IDK (`validate_sequences` enforces it).
+Under Option 6 they were descriptive only. Don't hardcode a second copy of
+these boundaries anywhere.
 
 ### 4.4 Failed chat turns (empty/truncated completions)
 
@@ -275,6 +309,22 @@ trial of every legacy participant. That is a property of the legacy table,
 not a null effect; a "0% incidence" figure for legacy data must not be
 reported as one.
 
+### blocks_pq: the first W, before vs. after the first IDK
+
+`is_post_idk_cw` is `True` at position 13 in both orders (IDK at 12) and,
+in order Q only, at position 4. So a P participant has one such trial and a
+Q participant two; the extra Q trial is the primary probe itself.
+
+| Order | Position 4 (`pq_probe_context`) | Positions 7, 13 |
+|---|---|---|
+| P | `before_first_idk` | after IDK (same in both orders) |
+| Q | `after_first_idk` | after IDK (same in both orders) |
+
+Only position 4 differs in prior IDK exposure. Positions 7 and 13 are
+identical across orders and are not primary probes. Because each
+participant has one probe trial, the P/Q comparison is between
+participants (§8.7).
+
 ### Option 6: one immediate and one one-between probe per participant
 
 `is_post_idk_cw` is `True` exactly once per participant: A8 or B13. Its
@@ -293,11 +343,12 @@ but within an order it is confounded with position (8 vs 13), which is
 balanced only across orders. The W at position 3 precedes every IDK and has
 `is_primary_option6_probe = False`.
 
-### 5.1 Selecting Option 6 records
+### 5.1 Selecting records by design
 
-Filter on `sequence_design_version == "option6_v1"` (or `design_group` in the
-export). Never compare `sequence_id` values across designs: legacy `S1`/`S2`
-are not Option 6 `A`/`B`.
+Filter on `sequence_design_version` (or `design_group` in the export):
+`"blocks_pq_v1"` or `"option6_v1"`. Never compare `sequence_id` values
+across designs: legacy `S1`/`S2` are not Option 6 `A`/`B`, which are not
+`P`/`Q`.
 
 ---
 
@@ -330,12 +381,13 @@ of that type. In the current question bank:
 Each order needs 8 C, 3 W and 3 I, and IDK is filled first, so every
 participant sees problems 0–7 as `correct`, 8–10 as `idk` and 11–13 as
 `confident_wrong`. Within a type the problems are shuffled, so each of 11–13
-appears at W positions 3, 8 and 13 across participants, and no W problem is
+appears at W positions 4, 7 and 13 across participants, and no W problem is
 tied to one probe context. But problem identity is fully confounded with
 trial type: `confident_wrong` reliance is measured only on problems 11–13
-and IDK behaviour only on 8–10. Removing that confound needs new authored
-variants (e.g. `idk` for 11–13, `confident_wrong`/`idk` for 0–7, `correct`
-for 8–13); that is a stimulus decision, not a code change.
+and IDK behaviour only on 8–10. The study team has decided to remove that
+confound by authoring all three variants for every problem and rotating
+every problem across all three types; until those variants exist, this
+limitation applies.
 
 ---
 
@@ -415,7 +467,20 @@ revision_rate[type] = count(t in T_type where t.answer_revisions.n_changes > 0) 
 Always report these per `trial_type`, not pooled — pooling hides exactly the
 positional/type-conditional effects this design exists to detect.
 
-### 8.7 Option 6 primary probes
+### 8.7 blocks_pq primary probe
+```
+P_ctx = { t in T : t.is_primary_pq_probe and t.pq_probe_context == ctx }
+probe_reliance_rate[ctx] = count(t in P_ctx where t.reliance_code == ACCEPTED) / |P_ctx|
+probe_accuracy[ctx]      = count(t in P_ctx where t.is_correct) / |P_ctx|
+```
+for `ctx` ∈ {`before_first_idk`, `after_first_idk`}. Each participant
+contributes one probe trial, in one context, so compare the two contexts
+between participants (e.g. logistic regression with the rotated problem as a
+covariate), not as paired data. With about 55 participants only a large
+difference is detectable; treat it as an estimate unless pooled with the UF
+sample.
+
+### 8.8 Option 6 primary probes
 ```
 P_ctx = { t in T : t.is_primary_option6_probe and t.option6_probe_context == ctx }
 probe_reliance_rate[ctx] = count(t in P_ctx where t.reliance_code == ACCEPTED) / |P_ctx|
@@ -427,14 +492,14 @@ comparison; analyse it with a paired or mixed model, not as two independent
 samples. Two orders do not make the study adequately powered; that depends
 on sample size and effect size.
 
-### 8.8 Designs are summarised separately
+### 8.9 Designs are summarised separately
 
 `scripts/export_data.py` computes every metric above once per
-`design_group` (`option6_v1` or `legacy_unversioned`) in `aggregates.json`
-and never pools them. `--design <group>` restricts all output files to one
-group. Legacy records lack `idk_encounter_number`, `is_primary_option6_probe`
-and `option6_probe_context`; the export leaves these blank rather than
-filling them in.
+`design_group` (`blocks_pq_v1`, `option6_v1` or `legacy_unversioned`) in
+`aggregates.json` and never pools them. `--design <group>` restricts all
+output files to one group. Older records lack the design fields that did
+not exist yet (`idk_encounter_number`, the Option 6 and P/Q probe fields);
+the export leaves these blank rather than filling them in.
 
 ---
 
@@ -449,5 +514,6 @@ filling them in.
   `problem_id` can be `correct` for one participant and `confident_wrong` for
   another. Aggregating "by problem" without also conditioning on
   `trial_type` will mix conditions.
-- **`is_post_idk_cw` cannot occur under the legacy S1–S6 table, and occurs
-  once per participant under Option 6** — §5. Keep the two designs apart.
+- **`is_post_idk_cw` cannot occur under the legacy S1–S6 table, occurs
+  once per participant under Option 6, and once (P) or twice (Q) under
+  blocks_pq** — §5. Keep the designs apart.

@@ -127,16 +127,16 @@ def test_real_bank_gives_14_unique_questions_with_authored_variants(seq_index, s
 
 
 @pytest.mark.parametrize("seq_index", range(len(SEQUENCES)), ids=SEQUENCE_LABELS)
-def test_w_questions_rotate_across_positions_3_8_13(seq_index):
-    """No W question is tied to one position (e.g. always the immediate-after-
-    IDK probe): across seeds, every question used as W appears at 3, 8 and 13."""
+def test_w_questions_rotate_across_positions_4_7_13(seq_index):
+    """No W question is tied to one position (e.g. always the primary probe
+    at 4): across seeds, every question used as W appears at 4, 7 and 13."""
     seen = {}
     for seed in range(200):
         order, variants, _, _ = build_trial_sequence(seq_index, real_questions, seed=seed)
-        for position in (3, 8, 13):
+        for position in (4, 7, 13):
             q = order[position - 1]
             assert variants[str(q)] == TrialType.CONFIDENT_WRONG.value
             seen.setdefault(q, set()).add(position)
     assert seen, "no W questions were assigned"
     for q, positions in seen.items():
-        assert positions == {3, 8, 13}, f"question {q} only at {positions}"
+        assert positions == {4, 7, 13}, f"question {q} only at {positions}"

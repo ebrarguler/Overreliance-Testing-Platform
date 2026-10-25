@@ -126,23 +126,33 @@ def compute_design_fields(realized_types, position_0idx, design_version):
 
     `realized_types` and `design_version` must come from the participant's
     own saved assignment, never from whichever sequences are currently
-    active, so a legacy participant is never labelled with Option 6 probes.
+    active, so a participant is only ever labelled with their own design's
+    probes.
 
       idk_encounter_number      1, 2, 3… on IDK trials (this is the n-th IDK
                                 the participant has seen); None otherwise.
+      is_primary_pq_probe       True only for the W trial at position 4 under
+                                the blocks_pq design.
+      pq_probe_context          "before_first_idk" (order P) /
+                                "after_first_idk" (order Q) on that probe;
+                                None otherwise.
       is_primary_option6_probe  True only for W trials at positions 8 and 13
-                                under the Option 6 design.
+                                under the earlier Option 6 design.
       option6_probe_context     "immediate_after_idk" / "one_correct_between"
-                                on those primary probes; None otherwise.
+                                on those Option 6 probes; None otherwise.
     """
     from .sequences import (  # local import, as in section_for_position
-        SEQUENCE_DESIGN_VERSION,
+        OPTION6_DESIGN_VERSION,
         OPTION6_PRIMARY_PROBE_POSITIONS,
+        PQ_PROBE_POSITION,
+        SEQUENCE_DESIGN_VERSION,
+        pq_probe_context,
         probe_context,
     )
 
     current_type = realized_types[position_0idx]
     position_1idx = position_0idx + 1
+    is_w = current_type == TrialType.CONFIDENT_WRONG.value
 
     idk_encounter_number = None
     if current_type == TrialType.IDK.value:
@@ -150,17 +160,26 @@ def compute_design_fields(realized_types, position_0idx, design_version):
             1 for t in realized_types[:position_0idx] if t == TrialType.IDK.value
         )
 
-    is_primary = (
+    is_pq_probe = (
         design_version == SEQUENCE_DESIGN_VERSION
+        and position_1idx == PQ_PROBE_POSITION
+        and is_w
+    )
+    is_option6_probe = (
+        design_version == OPTION6_DESIGN_VERSION
         and position_1idx in OPTION6_PRIMARY_PROBE_POSITIONS
-        and current_type == TrialType.CONFIDENT_WRONG.value
+        and is_w
     )
 
     return {
         "idk_encounter_number": idk_encounter_number,
-        "is_primary_option6_probe": is_primary,
+        "is_primary_pq_probe": is_pq_probe,
+        "pq_probe_context": (
+            pq_probe_context(realized_types, position_1idx) if is_pq_probe else None
+        ),
+        "is_primary_option6_probe": is_option6_probe,
         "option6_probe_context": (
-            probe_context(realized_types, position_1idx) if is_primary else None
+            probe_context(realized_types, position_1idx) if is_option6_probe else None
         ),
     }
 
@@ -176,7 +195,7 @@ _SECTION_LABELS = ["early", "middle", "late"]
 def section_for_position(position_1idx):
     """Map a 1-indexed trial position to "early"/"middle"/"late" using
     sequences.SECTION_BOUNDARIES, so there is only one copy of the
-    boundaries. Descriptive only; not a design constraint under Option 6."""
+    boundaries. Under the blocks_pq design these are the three blocks."""
     from .sequences import SECTION_BOUNDARIES  # local import: avoids a cycle at module load
 
     idx0 = position_1idx - 1

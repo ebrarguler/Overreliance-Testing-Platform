@@ -5,20 +5,23 @@ Two concerns live here, both backed by MongoDB so they're safe across
 concurrent requests and multiple gunicorn worker processes (an
 in-process lock would not help — each worker has its own memory):
 
-1. Least-filled order assignment. New participants are assigned to one of
-   the active orders (sequences.SEQUENCE_LABELS, currently A/B) by claiming
-   whichever has the fewest assignments so far, choosing at random when
-   they are tied. Counts live in `sequence_counts`, one document per
-   (design_version, label), incremented when an assignment is made — not
-   when a participant completes. The claim is a compare-and-swap: the
-   increment only succeeds if the counter still holds the value that was
-   read, so the counter claimed is always a true minimum at claim time.
-   Under contention a claim simply retries.
+1. Least-filled order assignment, per site. New participants are assigned
+   to one of the active orders (sequences.SEQUENCE_LABELS, currently P/Q)
+   by claiming whichever has the fewest assignments so far at their site,
+   choosing at random when they are tied. Balancing within each site keeps
+   UZH balanced on its own even while UF collects data at the same time.
+   Counts live in `sequence_counts`, one document per (design_version,
+   site, label), incremented when an assignment is made — not when a
+   participant completes. The claim is a compare-and-swap: the increment
+   only succeeds if the counter still holds the value that was read, so
+   the counter claimed is always a true minimum at claim time. Under
+   contention a claim simply retries.
 
-   Only counters for the active SEQUENCE_DESIGN_VERSION and its labels are
-   ever read or incremented. Counters from the earlier six-order design
-   (documents with label S1..S6 and no design_version) are left untouched
-   and can never be selected.
+   Only counters for the active SEQUENCE_DESIGN_VERSION, the participant's
+   site and the active labels are ever read or incremented. Counters from
+   earlier designs (Option 6 A/B, which had no site, and the six-order
+   S1..S6 design with no design_version) are left untouched and can never
+   be selected.
 
 2. Persistence + resume. The realized assignment (design version, label,
    type-at-position, problem-at-position, variants, seed) is written once
@@ -58,27 +61,38 @@ _tie_break_rng = random.SystemRandom()
 _MAX_CLAIM_ATTEMPTS = 50
 
 
-def _active_counter_filter():
+def _counter_key(site, label):
+    return {"design_version": SEQUENCE_DESIGN_VERSION, "site": site, "label": label}
+
+
+def _active_counter_filter(site):
     return {
         "design_version": SEQUENCE_DESIGN_VERSION,
+        "site": site,
         "label": {"$in": list(SEQUENCE_LABELS)},
     }
 
 
-def _sequence_counts_collection():
+def _sequence_counts_collection(site):
     coll = get_collection("sequence_counts")
+    # Counters used to be unique per (design_version, label). Per-site
+    # counters share those two fields across sites, so that index would
+    # reject the second site's counter.
+    if "design_version_label_unique" in coll.index_information():
+        coll.drop_index("design_version_label_unique")
     # Partial so legacy counter documents (no design_version) are not
-    # covered and cannot make the index build fail.
+    # covered and cannot make the index build fail. Option 6 counters have
+    # no site and stay unique as (version, null, label).
     coll.create_index(
-        [("design_version", 1), ("label", 1)],
-        name="design_version_label_unique",
+        [("design_version", 1), ("site", 1), ("label", 1)],
+        name="design_version_site_label_unique",
         unique=True,
         partialFilterExpression={"design_version": {"$type": "string"}},
     )
     for label in SEQUENCE_LABELS:
         try:
             coll.update_one(
-                {"design_version": SEQUENCE_DESIGN_VERSION, "label": label},
+                _counter_key(site, label),
                 {"$setOnInsert": {"count": 0}},
                 upsert=True,
             )
@@ -98,16 +112,16 @@ def _assignments_collection():
     return coll
 
 
-def _claim_least_filled_label():
+def _claim_least_filled_label(site):
     """
-    Atomically claim one slot in the least-filled active order and return its
-    label. Ties are broken at random.
+    Atomically claim one slot in the least-filled active order at this site
+    and return its label. Ties are broken at random.
     """
-    coll = _sequence_counts_collection()
+    coll = _sequence_counts_collection(site)
     for _ in range(_MAX_CLAIM_ATTEMPTS):
         counts = {
             doc["label"]: doc["count"]
-            for doc in coll.find(_active_counter_filter())
+            for doc in coll.find(_active_counter_filter(site))
         }
         missing = [label for label in SEQUENCE_LABELS if label not in counts]
         if missing:
@@ -117,11 +131,7 @@ def _claim_least_filled_label():
             [label for label in SEQUENCE_LABELS if counts[label] == lowest]
         )
         claimed = coll.find_one_and_update(
-            {
-                "design_version": SEQUENCE_DESIGN_VERSION,
-                "label": label,
-                "count": lowest,
-            },
+            {**_counter_key(site, label), "count": lowest},
             {"$inc": {"count": 1}},
             return_document=ReturnDocument.AFTER,
         )
@@ -130,10 +140,10 @@ def _claim_least_filled_label():
     raise RuntimeError("could not claim a sequence slot; too much contention")
 
 
-def _release_label(label):
+def _release_label(site, label):
     """Give back a slot claimed by a request that lost the assignment race."""
-    _sequence_counts_collection().update_one(
-        {"design_version": SEQUENCE_DESIGN_VERSION, "label": label},
+    _sequence_counts_collection(site).update_one(
+        _counter_key(site, label),
         {"$inc": {"count": -1}},
     )
 
@@ -159,11 +169,12 @@ def get_assignment(participant_id):
     return _record_to_result(record) if record is not None else None
 
 
-def get_or_create_assignment(participant_id, questions):
+def get_or_create_assignment(participant_id, questions, site):
     """
     Return this participant's realized assignment, creating and persisting
     one only if none exists yet for their participant_id. Never reassigns a
     participant who already has a persisted assignment — legacy or current.
+    A new assignment is balanced among participants of the same `site`.
 
     Returns
     -------
@@ -176,18 +187,19 @@ def get_or_create_assignment(participant_id, questions):
     if existing is not None:
         return _record_to_result(existing)
 
-    label = _claim_least_filled_label()
+    label = _claim_least_filled_label(site)
     seq_index = SEQUENCE_LABELS.index(label)
     try:
         question_order, variant_assignments, seq_label, seed = build_trial_sequence(
             seq_index, questions
         )
     except Exception:
-        _release_label(label)
+        _release_label(site, label)
         raise
 
     record = {
         "participant_id": participant_id,
+        "site": site,
         "sequence_design_version": SEQUENCE_DESIGN_VERSION,
         "sequence_label": seq_label,
         "type_at_position": list(SEQUENCES[seq_index]),
@@ -205,7 +217,7 @@ def get_or_create_assignment(participant_id, questions):
         # participant; the winner's assignment is authoritative. Give back
         # the slot this request claimed so the counts stay equal to the
         # number of assignments actually made.
-        _release_label(label)
+        _release_label(site, label)
         existing = coll.find_one({"participant_id": participant_id})
         return _record_to_result(existing)
 

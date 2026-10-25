@@ -1,7 +1,7 @@
 """
-Self-test for the active Option 6 sequence table (app.utils.sequences), and
-proof that validate_sequences() fails loudly on a table that breaks any of
-the design rules rather than being a no-op.
+Self-test for the active block design (orders P and Q in app.utils.sequences),
+and proof that validate_sequences() fails loudly on a table that breaks any
+of the design rules rather than being a no-op.
 
 Positions in this file are 1-indexed presentation positions, as in the design
 spec; the lists themselves are 0-indexed.
@@ -19,41 +19,43 @@ from app.utils.sequences import (
     SEQUENCES,
     SEQUENCE_LABELS,
     SEQUENCE_DESIGN_VERSION,
+    SECTION_BOUNDARIES,
     LEGACY_SEQUENCES,
+    OPTION6_SEQUENCES,
+    PQ_AFTER_IDK,
+    PQ_BEFORE_IDK,
+    PQ_PROBE_POSITION,
     PROBE_IMMEDIATE,
     PROBE_ONE_BETWEEN,
+    pq_probe_context,
     probe_context,
     validate_sequences,
 )
 
 
 def _parse(row):
-    return [{"C": C, "W": W, "I": I}[t] for t in row.split()]
+    return [{"C": C, "W": W, "I": I}[t] for t in row.replace("|", " ").split()]
 
 
-ORDER_A = _parse("C C W I C C I W C C I C W C")
-ORDER_B = _parse("C C W I C I C W C C C I W C")
+ORDER_P = _parse("C C C W I | C W C I C | C I W C")
+ORDER_Q = _parse("C C I W C | C W C I C | C I W C")
 
 
-def _at(seq, position_1idx):
-    return seq[position_1idx - 1]
-
-
-def _prior_idks(seq, position_1idx):
-    return sum(1 for t in seq[: position_1idx - 1] if t == I)
+def _positions(seq, trial_type):
+    return [p for p, t in enumerate(seq, start=1) if t == trial_type]
 
 
 def test_validate_sequences_passes_on_the_real_table():
     assert validate_sequences() is True
 
 
-def test_design_version_is_option6():
-    assert SEQUENCE_DESIGN_VERSION == "option6_v1"
+def test_design_version_is_blocks_pq():
+    assert SEQUENCE_DESIGN_VERSION == "blocks_pq_v1"
 
 
-def test_exactly_the_two_option6_orders_are_active():
-    assert SEQUENCE_LABELS == ["A", "B"]
-    assert SEQUENCES == [ORDER_A, ORDER_B]
+def test_exactly_orders_p_and_q_are_active():
+    assert SEQUENCE_LABELS == ["P", "Q"]
+    assert SEQUENCES == [ORDER_P, ORDER_Q]
 
 
 def test_each_order_has_14_positions_and_8_c_3_w_3_i():
@@ -62,74 +64,79 @@ def test_each_order_has_14_positions_and_8_c_3_w_3_i():
         assert Counter(seq) == {C: 8, W: 3, I: 3}
 
 
-def test_no_consecutive_idks():
+def test_every_block_has_one_w_and_one_idk():
+    assert SECTION_BOUNDARIES == [(0, 5), (5, 10), (10, 14)]
     for seq in SEQUENCES:
-        for pos in range(2, 15):
-            assert not (_at(seq, pos) == I and _at(seq, pos - 1) == I)
+        for start, end in SECTION_BOUNDARIES:
+            block = Counter(seq[start:end])
+            assert block[W] == 1 and block[I] == 1
 
 
-def test_w_is_at_positions_3_8_13_only():
+def test_no_consecutive_idks_and_two_correct_trials_first():
     for seq in SEQUENCES:
-        assert [p for p in range(1, 15) if _at(seq, p) == W] == [3, 8, 13]
+        assert seq[:2] == [C, C]
+        assert not any(seq[i] == seq[i + 1] == I for i in range(13))
 
 
-def test_first_idk_is_at_position_4():
-    for seq in SEQUENCES:
-        assert [p for p in range(1, 15) if _at(seq, p) == I][0] == 4
+def test_w_positions_are_the_same_in_both_orders():
+    assert _positions(ORDER_P, W) == _positions(ORDER_Q, W) == [4, 7, 13]
 
 
-def test_previous_idk_counts_at_primary_probes():
-    for seq in SEQUENCES:
-        assert _prior_idks(seq, 8) == 2
-        assert _prior_idks(seq, 13) == 3
+def test_orders_differ_only_at_positions_3_and_5():
+    differing = [p for p in range(1, 15) if ORDER_P[p - 1] != ORDER_Q[p - 1]]
+    assert differing == [3, 5]
+
+
+def test_first_w_is_before_idk_in_p_and_after_idk_in_q():
+    assert PQ_PROBE_POSITION == 4
+    assert pq_probe_context(ORDER_P, 4) == PQ_BEFORE_IDK
+    assert pq_probe_context(ORDER_Q, 4) == PQ_AFTER_IDK
+    # The later W trials have the same context in both orders.
+    for position in (7, 13):
+        assert pq_probe_context(ORDER_P, position) == pq_probe_context(ORDER_Q, position)
+
+
+def test_pq_probe_context_is_none_off_w_trials():
+    assert pq_probe_context(ORDER_P, 1) is None
+    assert pq_probe_context(ORDER_P, 5) is None
+
+
+def test_earlier_designs_are_kept_unchanged_for_reference():
+    assert sorted(LEGACY_SEQUENCES) == ["S1", "S2", "S3", "S4", "S5", "S6"]
+    assert LEGACY_SEQUENCES["S1"] == _parse("C W C I C C W C I C W C I C")
+    assert OPTION6_SEQUENCES == {
+        "A": _parse("C C W I C C I W C C I C W C"),
+        "B": _parse("C C W I C I C W C C C I W C"),
+    }
+    old_labels = set(LEGACY_SEQUENCES) | set(OPTION6_SEQUENCES)
+    assert not old_labels & set(SEQUENCE_LABELS)
 
 
 @pytest.mark.parametrize(
-    "seq,position,expected",
-    [
-        (ORDER_A, 8, PROBE_IMMEDIATE),
-        (ORDER_A, 13, PROBE_ONE_BETWEEN),
-        (ORDER_B, 8, PROBE_ONE_BETWEEN),
-        (ORDER_B, 13, PROBE_IMMEDIATE),
-    ],
-    ids=["A8", "A13", "B8", "B13"],
+    "label,position,expected",
+    [("A", 8, PROBE_IMMEDIATE), ("A", 13, PROBE_ONE_BETWEEN),
+     ("B", 8, PROBE_ONE_BETWEEN), ("B", 13, PROBE_IMMEDIATE)],
 )
-def test_primary_probe_contexts(seq, position, expected):
-    assert probe_context(seq, position) == expected
-
-
-def test_each_order_has_one_probe_of_each_context():
-    for seq in SEQUENCES:
-        assert sorted([probe_context(seq, 8), probe_context(seq, 13)]) == sorted(
-            [PROBE_IMMEDIATE, PROBE_ONE_BETWEEN]
-        )
-
-
-def test_position_3_is_a_pre_idk_w_with_no_probe_context():
-    for seq in SEQUENCES:
-        assert _at(seq, 3) == W
-        assert _prior_idks(seq, 3) == 0
-        assert probe_context(seq, 3) is None
-
-
-def test_legacy_table_is_kept_unchanged_for_reference():
-    assert sorted(LEGACY_SEQUENCES) == ["S1", "S2", "S3", "S4", "S5", "S6"]
-    assert LEGACY_SEQUENCES["S1"] == _parse("C W C I C C W C I C W C I C")
-    assert not set(LEGACY_SEQUENCES) & set(SEQUENCE_LABELS)
+def test_option6_probe_contexts_are_unchanged(label, position, expected):
+    assert probe_context(OPTION6_SEQUENCES[label], position) == expected
 
 
 _BROKEN_TABLES = {
-    "three orders": ([ORDER_A, ORDER_B, ORDER_A], ["A", "B", "C"]),
-    "one order": ([ORDER_A], ["A"]),
-    "15 positions": ([ORDER_A + [C], ORDER_B], ["A", "B"]),
-    "9 C": ([_parse("C C W C C C I W C C I C W C"), ORDER_B], ["A", "B"]),
-    "consecutive IDKs": ([_parse("C C W I I C C W C C I C W C"), ORDER_B], ["A", "B"]),
-    "W moved off 13": ([_parse("C C W I C C I W C C I W C C"), ORDER_B], ["A", "B"]),
-    "first IDK at 5": ([_parse("C C W C I C I W C C I C W C"), ORDER_B], ["A", "B"]),
-    # Both probes immediate: 8 and 13 each preceded directly by IDK.
-    "two immediate probes": ([_parse("C C W I C C I W C C C I W C"), ORDER_B], ["A", "B"]),
-    "identical orders": ([ORDER_A, ORDER_A], ["A", "B"]),
-    "unknown type": ([[C, "typo"] + ORDER_A[2:], ORDER_B], ["A", "B"]),
+    "three orders": ([ORDER_P, ORDER_Q, ORDER_P], ["P", "Q", "R"]),
+    "one order": ([ORDER_P], ["P"]),
+    "15 positions": ([ORDER_P + [C], ORDER_Q], ["P", "Q"]),
+    "9 C": ([_parse("C C C W C | C W C I C | C I W C"), ORDER_Q], ["P", "Q"]),
+    "consecutive IDKs": ([_parse("C C C W I | I W C C C | C I W C"), ORDER_Q], ["P", "Q"]),
+    "block 1 has no IDK": ([_parse("C C C W C | I W C I C | C I W C"), ORDER_Q], ["P", "Q"]),
+    "opens with IDK": ([_parse("I C C W C | C W C I C | C I W C"), ORDER_Q], ["P", "Q"]),
+    "first W at 3": ([_parse("C C W C I | C W C I C | C I W C"),
+                      _parse("C I W C C | C W C I C | C I W C")], ["P", "Q"]),
+    "W positions differ": ([ORDER_P, _parse("C C I W C | W C C I C | C I W C")], ["P", "Q"]),
+    "differ after block 1": ([ORDER_P, _parse("C C I W C | C W C I C | C I C W")], ["P", "Q"]),
+    "both after IDK": ([_parse("C C I W C | C W C I C | C I W C"),
+                        _parse("C I C W C | C W C I C | C I W C")], ["P", "Q"]),
+    "identical orders": ([ORDER_P, ORDER_P], ["P", "Q"]),
+    "unknown type": ([[C, "typo"] + ORDER_P[2:], ORDER_Q], ["P", "Q"]),
 }
 
 
