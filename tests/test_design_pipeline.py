@@ -175,12 +175,16 @@ def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, force
     assert doc["sequence_label"] == label
     assert doc["type_at_position"] == expected_types == assignment["type_at_position"]
     assert doc["rotation_seed"] == assignment["seed"]
+    assert doc["rotation_scheme"] == assignment["rotation_scheme"] == "difficulty_balanced_v1"
     assert doc["question_order"] == assignment["problem_at_position"]
 
     trials = [doc["answers"][q] for q in doc["question_order"]]
     assert [t["position"] for t in trials] == list(range(1, 15))
     assert [t["trial_type"] for t in trials] == expected_types
     assert len({t["problem_id"] for t in trials}) == 14
+    for trial_type in (W, I):
+        levels = sorted(t["difficulty"] for t in trials if t["trial_type"] == trial_type)
+        assert levels == ["easy", "hard", "medium"]
     for t in trials:
         assert t["sequence_design_version"] == "blocks_pq_v1"
         if t["trial_type"] == I:
@@ -217,6 +221,7 @@ def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, force
     assert p_row["sequence"] == label
     assert p_row["participant_uuid"] == doc["participant_id"]
     assert p_row["rotation_seed"] == str(assignment["seed"])
+    assert p_row["rotation_scheme"] == "difficulty_balanced_v1"
 
     with open(tmp_path / "trials.csv") as f:
         rows = list(csv.DictReader(f))
@@ -227,6 +232,7 @@ def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, force
         assert row["sequence_id"] == label
         assert row["position"] == str(t["position"])
         assert row["problem_id"] == str(t["problem_id"])
+        assert row["difficulty"] == t["difficulty"]
         assert row["trial_type"] == t["trial_type"]
         assert row["is_primary_pq_probe"] == str(t["is_primary_pq_probe"])
         assert row["pq_probe_context"] == (t["pq_probe_context"] or "")

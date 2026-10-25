@@ -30,17 +30,19 @@ def _todo():
 
 @pytest.fixture
 def synthetic_questions():
-    """8 questions eligible only for CORRECT, 6 eligible for {CONFIDENT_WRONG, IDK} —
-    mirrors the real bank's current shape (see questions.py)."""
+    """8 questions eligible only for CORRECT, 6 eligible for {CONFIDENT_WRONG,
+    IDK} — two of each difficulty, so W and IDK can each get one per level."""
     questions = []
     for i in range(8):
         questions.append({
             "id": i,
+            "difficulty": "medium",
             "variants": {"correct": _authored(), "confident_wrong": _todo(), "idk": _todo()},
         })
-    for i in range(8, 14):
+    for i, level in zip(range(8, 14), ["easy", "easy", "medium", "medium", "hard", "hard"]):
         questions.append({
             "id": i,
+            "difficulty": level,
             "variants": {"correct": _todo(), "confident_wrong": _authored(), "idk": _authored()},
         })
     return questions
@@ -107,7 +109,7 @@ def test_rotate_problems_true_vs_false_can_differ(monkeypatch, synthetic_questio
 
 
 # ---------------------------------------------------------------------------
-# The real question bank under the Option 6 orders
+# The real question bank under the P/Q orders
 # ---------------------------------------------------------------------------
 
 from app.utils.questions import questions as real_questions  # noqa: E402
@@ -140,3 +142,83 @@ def test_w_questions_rotate_across_positions_4_7_13(seq_index):
     assert seen, "no W questions were assigned"
     for q, positions in seen.items():
         assert positions == {4, 7, 13}, f"question {q} only at {positions}"
+
+
+# ---------------------------------------------------------------------------
+# Balancing by difficulty (sequences.ROTATION_SCHEME)
+# ---------------------------------------------------------------------------
+
+from collections import Counter  # noqa: E402
+
+from app.utils.sequences import (  # noqa: E402
+    DIFFICULTY_LEVELS,
+    validate_pool_sufficiency,
+)
+
+C, W, I = "correct", "confident_wrong", "idk"
+
+
+def _levels_by_type(order, variants, bank):
+    by_type = {C: Counter(), W: Counter(), I: Counter()}
+    for q in order:
+        by_type[variants[str(q)]][bank[q]["difficulty"]] += 1
+    return by_type
+
+
+@pytest.mark.parametrize("seq_index", range(len(SEQUENCES)), ids=SEQUENCE_LABELS)
+@pytest.mark.parametrize("seed", range(40))
+def test_each_participant_gets_one_w_and_one_idk_per_difficulty(seq_index, seed):
+    order, variants, _, _ = build_trial_sequence(seq_index, real_questions, seed=seed)
+    by_type = _levels_by_type(order, variants, real_questions)
+    one_each = {level: 1 for level in DIFFICULTY_LEVELS}
+    assert by_type[W] == one_each
+    assert by_type[I] == one_each
+    assert by_type[C] == {"easy": 2, "medium": 4, "hard": 2}
+
+
+def test_every_problem_is_shown_as_every_type_across_participants():
+    seen = {q: set() for q in range(14)}
+    for seed in range(300):
+        order, variants, _, _ = build_trial_sequence(seed % 2, real_questions, seed=seed)
+        for q in order:
+            seen[q].add(variants[str(q)])
+    assert all(types == {C, W, I} for types in seen.values()), seen
+
+
+def test_problems_of_a_level_are_drawn_equally_often():
+    # Each hard (and each easy) problem should be W and IDK about a quarter
+    # of the time; each medium one about a sixth.
+    counts = {q: Counter() for q in range(14)}
+    n = 3000
+    for seed in range(n):
+        _, variants, _, _ = build_trial_sequence(0, real_questions, seed=seed)
+        for q, t in variants.items():
+            counts[int(q)][t] += 1
+    for q, c in counts.items():
+        expected = 1 / 6 if real_questions[q]["difficulty"] == "medium" else 1 / 4
+        for t in (W, I):
+            assert abs(c[t] / n - expected) < 0.04, (q, t, c[t] / n)
+
+
+def test_rotate_problems_false_picks_the_lowest_index_per_level(monkeypatch):
+    monkeypatch.setattr(seq_module, "ROTATE_PROBLEMS", False)
+    order, variants, _, seed = build_trial_sequence(0, real_questions)
+    assert seed is None
+    idk = sorted(int(q) for q, t in variants.items() if t == I)
+    wrong = sorted(int(q) for q, t in variants.items() if t == W)
+    # Lowest easy/medium/hard for IDK (0, 2, 8), the next ones for W (1, 4, 9).
+    assert idk == [0, 2, 8] and wrong == [1, 4, 9]
+
+
+def test_a_bank_that_cannot_be_balanced_is_rejected(synthetic_questions):
+    synthetic_questions[12]["difficulty"] = "medium"  # only one hard problem left
+    with pytest.raises(ValueError, match="hard"):
+        build_trial_sequence(0, synthetic_questions, seed=1)
+    with pytest.raises(ValueError, match="hard"):
+        validate_pool_sufficiency(synthetic_questions)
+
+
+def test_an_unknown_difficulty_label_is_rejected_at_startup(synthetic_questions):
+    synthetic_questions[0]["difficulty"] = "very hard"
+    with pytest.raises(ValueError, match="very hard"):
+        validate_pool_sufficiency(synthetic_questions)

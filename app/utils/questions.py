@@ -15,11 +15,13 @@ always appear as the misleading one.
   - the fallback trial type when get_initial_recommendation/get_chat_prompt
     are called without an explicit `variant`.
 
-Every problem now has all three variants written. Wording not yet signed
-off carries `review_status: pending_final_review`
-(trial_types.is_pending_review); a variant written but not yet served to
-participants also carries `in_rotation: False` (trial_types.is_in_rotation).
-Both markers are metadata, never text, so they cannot reach a participant.
+Every problem has all three variants written, and every problem is
+randomized across all three types per participant, balanced by its
+`difficulty` label (sequences.ROTATION_SCHEME). Wording not yet signed off
+carries `review_status: pending_final_review`
+(trial_types.is_pending_review). A variant can also be held out of rotation
+with `in_rotation: False` (trial_types.is_in_rotation). Both markers are
+metadata, never text, so they cannot reach a participant.
 The drafted texts are collected in one block (_DRAFT_WRONG, _DRAFT_CORRECT,
 _IDK_TOPICS, IDK_ABSTENTIONS) for review. A slot can still be a TODO
 placeholder (trial_types.is_placeholder) if a problem is added later.
@@ -141,10 +143,10 @@ def _idk_variant(question_context, in_rotation=True):
 
 
 # ---------------------------------------------------------------------------
-# Texts drafted so every problem can be shown as correct, wrong and IDK.
-# All are `pending_final_review` and held out of rotation (`in_rotation:
-# False`) until every problem is randomized across all three types.
-# Review these before data collection.
+# Texts drafted so every problem can be shown as correct, wrong and IDK
+# (every problem is randomized across all three types, see
+# sequences.ROTATION_SCHEME). All are `pending_final_review`: review them
+# before data collection.
 # ---------------------------------------------------------------------------
 
 # Wrong recommendations for problems 0-7: (text, the option it endorses).
@@ -216,7 +218,6 @@ def _draft_wrong(problem_id):
     # the same for the correct and the wrong variant.
     return {
         "review_status": REVIEW_PENDING,
-        "in_rotation": False,
         "initial_recommendation": text,
         "endorsed_answer": endorsed,
         "chat_prompt": None,
@@ -226,7 +227,6 @@ def _draft_wrong(problem_id):
 def _draft_correct(problem_id):
     return {
         "review_status": REVIEW_PENDING,
-        "in_rotation": False,
         "initial_recommendation": _DRAFT_CORRECT[problem_id],
         "chat_prompt": None,
     }
@@ -274,9 +274,8 @@ def get_chat_prompt(question_index, variant=None):
 
 questions = [
     # --- Originally "correct-recommendation" questions (8) ------------------
-    # `correct` is the original UF text. `confident_wrong` and `idk` are
-    # drafts (pending review) held out of rotation, so for now these 8 are
-    # still served only as CORRECT.
+    # `correct` is the original UF text; `confident_wrong` and `idk` are
+    # drafts (pending review).
     {
         'id': 0,
         'question': 'What is the output of:\nx = [1, 2] + [2, 3]\ny = set(x)\nprint(len(x), len(y))',
@@ -295,7 +294,7 @@ questions = [
                 }
             },
             'confident_wrong': _draft_wrong(0),
-            'idk': _idk_variant(_IDK_TOPICS[0], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[0]),
         }
     },
     {
@@ -316,7 +315,7 @@ questions = [
                 }
             },
             'confident_wrong': _draft_wrong(1),
-            'idk': _idk_variant(_IDK_TOPICS[1], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[1]),
         }
     },
     {
@@ -337,7 +336,7 @@ questions = [
                 }
             },
             'confident_wrong': _draft_wrong(2),
-            'idk': _idk_variant(_IDK_TOPICS[2], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[2]),
         }
     },
     {
@@ -358,7 +357,7 @@ questions = [
                 }
             },
             'confident_wrong': _draft_wrong(3),
-            'idk': _idk_variant(_IDK_TOPICS[3], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[3]),
         }
     },
     {
@@ -379,7 +378,7 @@ questions = [
                 }
             },
             'confident_wrong': _draft_wrong(4),
-            'idk': _idk_variant(_IDK_TOPICS[4], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[4]),
         }
     },
     {
@@ -400,7 +399,7 @@ questions = [
                 }
             },
             'confident_wrong': _draft_wrong(5),
-            'idk': _idk_variant(_IDK_TOPICS[5], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[5]),
         }
     },
     {
@@ -421,7 +420,7 @@ questions = [
                 }
             },
             'confident_wrong': _draft_wrong(6),
-            'idk': _idk_variant(_IDK_TOPICS[6], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[6]),
         }
     },
     {
@@ -442,14 +441,13 @@ questions = [
                 }
             },
             'confident_wrong': _draft_wrong(7),
-            'idk': _idk_variant(_IDK_TOPICS[7], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[7]),
         }
     },
 
     # --- Originally "critical" questions (6) --------------------------------
-    # `confident_wrong` is the original UF text. `idk` for 8-10 is a draft in
-    # rotation (pending review); `correct` for all six and `idk` for 11-13 are
-    # drafts held out of rotation. See trial_types.idk_leakage_issues for what
+    # `confident_wrong` is the original UF text; `correct` and `idk` are
+    # drafts (pending review). See trial_types.idk_leakage_issues for what
     # IDK content must satisfy, and docs/IDK_MANUAL_EVAL.md for the
     # live-model adherence check that has not been run yet.
     {
@@ -537,7 +535,7 @@ questions = [
                     'stance': 'Explain how string methods modify strings.'
                 }
             },
-            'idk': _idk_variant(_IDK_TOPICS[11], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[11]),
         }
     },
     {
@@ -559,7 +557,7 @@ questions = [
                     'stance': 'Explain how dictionary views reflect dictionary state.'
                 }
             },
-            'idk': _idk_variant(_IDK_TOPICS[12], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[12]),
         }
     },
     {
@@ -581,7 +579,7 @@ questions = [
                     'stance': 'Explain how list copying works with nested structures.'
                 }
             },
-            'idk': _idk_variant(_IDK_TOPICS[13], in_rotation=False),
+            'idk': _idk_variant(_IDK_TOPICS[13]),
         }
     },
 ]

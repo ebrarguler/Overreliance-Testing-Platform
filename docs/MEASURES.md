@@ -22,10 +22,9 @@ the export never pools them (§8.9).
 Every trial has a `trial_type` ∈ {`correct`, `confident_wrong`, `idk`}
 (`app/utils/trial_types.py:TrialType`). The type at each presentation
 position comes from the participant's assigned order (`app/utils/sequences.py`).
-Which problem fills each position is rotated per participant, drawing only
-from problems with an authored variant of that type. In principle the same
-problem can be `correct` for one participant and `confident_wrong` for
-another; with the variants currently authored it cannot (see §6.1).
+Which problem is shown under which type is drawn per participant, balanced
+by difficulty (§6.1), so the same problem is `correct` for one participant
+and `confident_wrong` or `idk` for another.
 
 ### 1.1 Block design, orders P and Q (`sequence_design_version = "blocks_pq_v1"`, current)
 
@@ -145,6 +144,7 @@ Mongo document (indexed by problem id, not presentation position — see
 | `position` | int, 1–14 | Presentation position |
 | `section` | `early`\|`middle`\|`late` | Positions 1–5 / 6–10 / 11–14, from `sequences.SECTION_BOUNDARIES`; the three blocks under blocks_pq |
 | `problem_id` | int | Stable question id, independent of position |
+| `difficulty` | `easy`\|`medium`\|`hard` | The problem's difficulty label in `questions.py` (an author's label, not measured), used to balance the draw (§6.1). Absent on older records |
 | `trial_type` | `correct`\|`confident_wrong`\|`idk` | The variant actually shown. Use this, not `response_type` (the problem's default category in `questions.py`, kept for backward compatibility) |
 | `answer` | str | Final answer (alias: `answer_revisions.final_answer`) |
 | `correct_answer` | str | Ground truth |
@@ -370,27 +370,43 @@ so records written before this change are coded the same way.
 
 ---
 
-### 6.1 Known limitation: rotation is only within trial type
+### 6.1 Which problem is shown under which type: balanced by difficulty
 
-Every problem now has all three variants written, but the 25 new drafts
-carry `in_rotation: False` and are not served yet. Rotation therefore still
-draws from the original split:
+Every problem has all three variants written, and every problem can be drawn
+as any trial type (`rotation_scheme = "difficulty_balanced_v1"`, stored with
+the assignment and in `participants.csv`). Each participant's draw is
+balanced by the `difficulty` label in `questions.py`:
 
-| Problems | Variants in rotation |
-|---|---|
-| 0–7 | `correct` |
-| 8–10 | `confident_wrong`, `idk` (IDK wording marked `pending_final_review`) |
-| 11–13 | `confident_wrong` |
+| Type | easy | medium | hard |
+|---|---|---|---|
+| `confident_wrong` | 1 | 1 | 1 |
+| `idk` | 1 | 1 | 1 |
+| `correct` | 2 | 4 | 2 |
 
-Each order needs 8 C, 3 W and 3 I, and IDK is filled first, so every
-participant sees problems 0–7 as `correct`, 8–10 as `idk` and 11–13 as
-`confident_wrong`. Within a type the problems are shuffled, so each of 11–13
-appears at W positions 4, 7 and 13 across participants, and no W problem is
-tied to one probe context. But problem identity is fully confounded with
-trial type: `confident_wrong` reliance is measured only on problems 11–13
-and IDK behaviour only on 8–10. The study team has decided to remove that
-confound by randomizing every problem across all three types; this
-limitation applies until that is switched on.
+(4 easy, 6 medium and 4 hard problems in the bank.) Per level, the W and IDK
+problems are drawn together at random from that level, then each type's
+problems are shuffled across its positions, all from the stored seed. Across
+participants each easy or hard problem is W about a quarter of the time and
+IDK about a quarter; each medium problem about a sixth each.
+
+So trial type is no longer confounded with problem identity, and W and IDK
+trials have the same mix of difficulty for every participant. What remains:
+
+- The labels are the authors' judgement, not measured difficulty. Check them
+  against observed accuracy (e.g. `idk` and `correct` trials per problem)
+  before relying on them, and keep `problem_id` in models.
+- Every participant sees one IDK on a problem labelled easy. The pilot
+  suggested an IDK on an easy-looking problem reads as scripted, so consider
+  difficulty (or a perceived-difficulty rating) as a moderator of IDK
+  responses.
+- The P/Q primary probe (§8.7) is one W per participant whose difficulty
+  varies between participants; include `difficulty` or `problem_id` when
+  comparing the two contexts.
+
+Records with no `rotation_scheme` (Option 6, S1–S6, and blocks_pq records
+assigned before this change) rotated within type only: problems 0–7 were
+always `correct`, 8–10 `idk` and 11–13 `confident_wrong`, so for them trial
+type and problem identity cannot be separated.
 
 ---
 
@@ -512,11 +528,11 @@ the export leaves these blank rather than filling them in.
 - **The overall accept-rate denominator excludes `idk` trials** — §8.3. Any
   script or notebook carried over from the original study that divides by
   `len(trials)` needs this fixed.
-- **`response_type` (the old correct/misleading-ish field) is now a
-  per-participant assignment, not a fixed property of a question** — a given
-  `problem_id` can be `correct` for one participant and `confident_wrong` for
-  another. Aggregating "by problem" without also conditioning on
-  `trial_type` will mix conditions.
+- **`response_type` is the problem's original category, not what was
+  shown** — a given `problem_id` is `correct` for some participants and
+  `confident_wrong` or `idk` for others (§6.1). Use `trial_type`;
+  aggregating "by problem" without also conditioning on `trial_type` will
+  mix conditions.
 - **`is_post_idk_cw` cannot occur under the legacy S1–S6 table, occurs
   once per participant under Option 6, and once (P) or twice (Q) under
   blocks_pq** — §5. Keep the designs apart.

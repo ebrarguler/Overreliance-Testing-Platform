@@ -16,7 +16,7 @@ Output files (written to exports/ by default)
 participants.csv  — one row per participant
     Columns: participant_id, site, prior_participation, participated_before,
              sequence_design_version, design_group, sequence,
-             type_at_position, rotation_seed, timestamp,
+             type_at_position, rotation_seed, rotation_scheme, timestamp,
              six pre-survey scale means, four final-survey scale means,
              total_duration_s
 
@@ -217,6 +217,7 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
         "sequence": doc.get("sequence_label", ""),
         "type_at_position": " ".join(doc.get("type_at_position") or []),
         "rotation_seed": doc.get("rotation_seed", ""),
+        "rotation_scheme": doc.get("rotation_scheme", ""),
         "timestamp": str(doc.get("timestamp", "")),
     }
 
@@ -283,6 +284,7 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "position": record.get("position", pos_0 + 1),
             "section": record.get("section", ""),
             "problem_id": record.get("problem_id", q_idx),
+            "difficulty": record.get("difficulty", ""),
             "trial_type": record.get("trial_type", record.get("variant_shown", "")),
 
             "participant_answer": record.get("answer", ""),
@@ -530,7 +532,7 @@ PARTICIPANT_FIELDS = (
     [
         "participant_id", "participant_uuid", "site", "prior_participation",
         "participated_before", "sequence_design_version", "design_group",
-        "sequence", "type_at_position", "rotation_seed", "timestamp",
+        "sequence", "type_at_position", "rotation_seed", "rotation_scheme", "timestamp",
     ]
     + [f"pre_{s}_mean" for s in PRE_SURVEY_SCALES]
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
@@ -546,6 +548,7 @@ TRIAL_FIELDS = [
     "position",
     "section",
     "problem_id",
+    "difficulty",
     "trial_type",
     "participant_answer",
     "correct_answer",

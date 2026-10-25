@@ -450,6 +450,9 @@ def quiz():
             answer_data = {
                 "question_index": current_q_index,
                 "problem_id": question["id"],
+                # The author's label, used to balance each participant's W
+                # and IDK problems (sequences.ROTATION_SCHEME).
+                "difficulty": question.get("difficulty"),
                 "position": position_0idx + 1,
                 "section": section_for_position(position_0idx + 1),
                 "sequence_id": session.get("sequence_label"),
@@ -924,6 +927,7 @@ def final_survey():
             ("sequence_design_version", "sequence_design_version"),
             ("type_at_position", "type_at_position"),
             ("rotation_seed", "seed"),
+            ("rotation_scheme", "rotation_scheme"),
         ):
             if assignment.get(source) is not None:
                 combined_data[key] = assignment[source]

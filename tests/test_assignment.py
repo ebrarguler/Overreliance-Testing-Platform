@@ -60,6 +60,7 @@ def test_new_assignment_persists_design_metadata(db):
         record["type_at_position"]
     )
     assert isinstance(record["seed"], int)
+    assert record["rotation_scheme"] == "difficulty_balanced_v1"
 
     assert result["sequence_design_version"] == "blocks_pq_v1"
     assert result["question_order"] == record["problem_at_position"]

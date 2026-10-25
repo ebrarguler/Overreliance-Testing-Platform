@@ -36,20 +36,20 @@ def test_every_problem_has_all_three_variants_written():
             assert not is_placeholder(q["variants"][t]), (q["id"], t)
 
 
-def test_new_drafts_are_pending_review_and_held_out_of_rotation():
+def test_new_drafts_are_pending_review_and_in_rotation():
     for q in questions:
         for t in (C, W, I):
             variant = q["variants"][t]
-            if q["id"] in ORIGINAL[t]:
-                assert is_in_rotation(variant), (q["id"], t)
-            else:
+            assert is_in_rotation(variant), (q["id"], t)
+            if q["id"] not in ORIGINAL[t]:
                 assert is_pending_review(variant), (q["id"], t)
-                assert not is_in_rotation(variant), (q["id"], t)
 
 
-def test_rotation_pools_are_unchanged_until_full_randomization():
+def test_every_problem_can_be_drawn_as_every_type():
     pools = build_eligibility_pools(questions)
-    assert {t.value: set(ids) for t, ids in pools.items()} == ORIGINAL
+    assert {t.value: set(ids) for t, ids in pools.items()} == {
+        C: set(range(14)), W: set(range(14)), I: set(range(14))
+    }
 
 
 def test_wrong_variants_store_a_wrong_option_that_the_text_states():

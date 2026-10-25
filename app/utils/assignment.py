@@ -50,6 +50,7 @@ from .sequences import (
     SEQUENCE_LABELS,
     SEQUENCES,
     ROTATE_PROBLEMS,
+    ROTATION_SCHEME,
     build_trial_sequence,
 )
 
@@ -158,6 +159,9 @@ def _record_to_result(record):
         "question_order": record["problem_at_position"],
         "variant_assignments": record["variant_assignments"],
         "seed": record.get("seed"),
+        # Absent on assignments made before problems were randomized across
+        # all three types (rotation within type only).
+        "rotation_scheme": record.get("rotation_scheme"),
     }
 
 
@@ -207,6 +211,7 @@ def get_or_create_assignment(participant_id, questions, site):
         "variant_assignments": variant_assignments,
         "seed": seed,
         "rotate_problems": ROTATE_PROBLEMS,
+        "rotation_scheme": ROTATION_SCHEME,
         "assigned_at": datetime.datetime.utcnow(),
     }
 

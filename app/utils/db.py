@@ -88,7 +88,8 @@ def insert_user_response(responses):
     # Design metadata from the persisted assignment (app.utils.assignment).
     # Written only when known, so legacy records are never given a value
     # they did not have.
-    for key in ("sequence_design_version", "type_at_position", "rotation_seed"):
+    for key in ("sequence_design_version", "type_at_position", "rotation_seed",
+                "rotation_scheme"):
         if key in responses:
             record[key] = responses[key]
     result = users_collection.update_one(

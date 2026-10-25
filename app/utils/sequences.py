@@ -40,6 +40,7 @@ reassigning. Participants assigned under an earlier design (Option 6 or the
 six-order S1-S6 table, both kept below) keep that assignment.
 """
 
+import itertools
 import random
 from collections import Counter
 
@@ -115,6 +116,17 @@ LEGACY_SEQUENCES = {
 # order (still respecting eligibility) — e.g. for a pilot where you want
 # every participant to see the same question in the same condition.
 ROTATE_PROBLEMS = True
+
+# Which problem is shown as which trial type is drawn per participant, from
+# every problem (all three variants are written for each). To keep problem
+# difficulty from differing between trial types, each of BALANCED_TYPES gets
+# exactly one problem from every DIFFICULTY_LEVELS stratum (the `difficulty`
+# label in questions.py); C gets the rest. With 4 easy, 6 medium and 4 hard
+# problems that is W: 1/1/1, IDK: 1/1/1, C: 2/4/2 for every participant.
+# Stored with each new assignment as `rotation_scheme`.
+ROTATION_SCHEME = "difficulty_balanced_v1"
+DIFFICULTY_LEVELS = ("easy", "medium", "hard")
+BALANCED_TYPES = (I, W)
 
 # ---------------------------------------------------------------------------
 # Probe classification — shared by validation and per-trial measures.
@@ -276,28 +288,94 @@ def build_eligibility_pools(questions):
     return pools
 
 
+def _assign_problems(seq_label, sequence, questions, rng):
+    """
+    Decide which problems fill each trial type for one participant.
+
+    For each difficulty level, one problem per BALANCED_TYPES type is drawn
+    together (an injective choice among the eligible, unclaimed problems at
+    that level), so drawing one type can never take the only problem another
+    type could use. C then takes the remaining C-eligible problems. With
+    rng=None every choice is the lowest index (deterministic).
+
+    Returns {TrialType: [question indices]}; raises ValueError if the bank
+    cannot fill the sequence this way.
+    """
+    needed = Counter(sequence)
+    pools = build_eligibility_pools(questions)
+    claimed = set()
+    assigned_to = {t: [] for t in TrialType}
+
+    for raw_type in BALANCED_TYPES:
+        if needed[raw_type] != len(DIFFICULTY_LEVELS):
+            raise ValueError(
+                f"Sequence {seq_label} has {needed[raw_type]} {raw_type!r} trial(s); "
+                f"balancing by difficulty needs exactly {len(DIFFICULTY_LEVELS)}, "
+                f"one per level {DIFFICULTY_LEVELS}"
+            )
+
+    balanced = [TrialType(t) for t in BALANCED_TYPES]
+    for level in DIFFICULTY_LEVELS:
+        at_level = [
+            sorted(q for q in pools[t] if questions[q].get("difficulty") == level)
+            for t in balanced
+        ]
+        choices = [
+            combo for combo in itertools.product(*at_level)
+            if len(set(combo)) == len(combo)
+        ]
+        if not choices:
+            raise ValueError(
+                f"Sequence {seq_label}: no distinct {level!r} problems for "
+                + ", ".join(
+                    f"{t.value!r} (eligible: {ids})" for t, ids in zip(balanced, at_level)
+                )
+            )
+        combo = rng.choice(choices) if rng else choices[0]
+        for t, q_idx in zip(balanced, combo):
+            assigned_to[t].append(q_idx)
+            claimed.add(q_idx)
+
+    for raw_type, count in needed.items():
+        t = TrialType(raw_type)
+        if raw_type in BALANCED_TYPES:
+            continue
+        rest = sorted(q for q in pools[t] if q not in claimed)
+        if len(rest) < count:
+            raise ValueError(
+                f"Sequence {seq_label} needs {count} {t.value!r} trial(s) but only "
+                f"{len(rest)} problem(s) eligible for it are left after the "
+                f"balanced draw"
+            )
+        if rng:
+            rng.shuffle(rest)
+        assigned_to[t] = rest[:count]
+        claimed.update(assigned_to[t])
+
+    return assigned_to
+
+
 def validate_pool_sufficiency(questions):
     """
-    Check that every configured sequence can be fully populated given which
-    trial types each question actually has authored content for.
+    Check that every configured sequence can be filled, balanced by
+    difficulty, given which trial types each problem has written content for
+    and which difficulty label it carries.
 
-    Raises ValueError, listing every shortfall plus every still-TODO variant
-    that would close a gap, instead of a live participant being served a
-    'TODO' placeholder or a mid-session StopIteration/ValueError.
+    Raises ValueError, listing every problem found, instead of a live
+    participant being served a 'TODO' placeholder or hitting an error
+    mid-session.
     """
-    pools = build_eligibility_pools(questions)
-    shortfalls = []
+    shortfalls = [
+        f"question {q['id']}: difficulty {q.get('difficulty')!r} is not one of "
+        f"{DIFFICULTY_LEVELS}"
+        for q in questions
+        if q.get("difficulty") not in DIFFICULTY_LEVELS
+    ]
     for label, seq in zip(SEQUENCE_LABELS, SEQUENCES):
-        needed = Counter(seq)
-        for raw_type, count in needed.items():
-            t = TrialType(raw_type)
-            available = len(pools[t])
-            if available < count:
-                shortfalls.append(
-                    f"{label} needs {count} {t.value!r} trial(s) but only "
-                    f"{available} question(s) currently have authored "
-                    f"{t.value!r} content"
-                )
+        try:
+            _assign_problems(label, seq, questions, rng=None)
+        except ValueError as exc:
+            shortfalls.append(str(exc))
 
     if not shortfalls:
         return
@@ -311,8 +389,8 @@ def validate_pool_sufficiency(questions):
     raise ValueError(
         "Question bank cannot satisfy the configured SEQUENCES:\n  "
         + "\n  ".join(shortfalls)
-        + "\n\nStill-TODO variants that would close the gap if authored:\n  "
-        + "\n  ".join(todo_by_type)
+        + "\n\nVariants not available for rotation (TODO or held out):\n  "
+        + "\n  ".join(todo_by_type or ["none"])
     )
 
 
@@ -326,6 +404,10 @@ def build_trial_sequence(seq_index, questions, seed=None):
     Build one participant's realized trial sequence: which question fills
     each position, and which trial type it's shown under.
 
+    Problems are assigned to trial types balanced by difficulty
+    (ROTATION_SCHEME; see _assign_problems), then shuffled within each type
+    across that type's positions.
+
     Parameters
     ----------
     seq_index : int
@@ -333,11 +415,11 @@ def build_trial_sequence(seq_index, questions, seed=None):
     questions : list
         The questions list from questions.py.
     seed : int, optional
-        RNG seed for the problem-to-position rotation. If None and
-        ROTATE_PROBLEMS is True, a fresh seed is generated and returned so
-        the caller can persist it for exact reproducibility later. Ignored
-        (and returned as None) when ROTATE_PROBLEMS is False, since no
-        randomness is used in that mode.
+        RNG seed for the draw and the shuffle. If None and ROTATE_PROBLEMS is
+        True, a fresh seed is generated and returned so the caller can
+        persist it for exact reproducibility later. Ignored (and returned as
+        None) when ROTATE_PROBLEMS is False, since no randomness is used in
+        that mode.
 
     Returns
     -------
@@ -346,68 +428,39 @@ def build_trial_sequence(seq_index, questions, seed=None):
     variant_assignments : dict[str, str]
         Maps str(question_index) → trial type shown to this participant.
     seq_label : str
-        Human-readable label e.g. "A".
+        Human-readable label e.g. "P".
     seed : int or None
         The seed actually used (None if ROTATE_PROBLEMS is False).
 
     Raises
     ------
     ValueError
-        If the sequence demands more questions of a type than are eligible.
-        validate_pool_sufficiency() should catch this at startup instead —
-        this is a defense-in-depth check, not the primary guard.
+        If the bank cannot fill the sequence. validate_pool_sufficiency()
+        should catch this at startup instead — this is a defense-in-depth
+        check, not the primary guard.
     """
     sequence = SEQUENCES[seq_index]
     seq_label = SEQUENCE_LABELS[seq_index]
-
-    pools = build_eligibility_pools(questions)
 
     if ROTATE_PROBLEMS:
         if seed is None:
             seed = random.SystemRandom().getrandbits(63)
         rng = random.Random(seed)
-        for t in pools:
-            rng.shuffle(pools[t])
     else:
         seed = None
-        for t in pools:
-            pools[t] = sorted(pools[t], reverse=True)  # deterministic; popped ascending below
+        rng = None
 
-    needed = Counter(sequence)
-
-    # Claim scarcest-eligibility types first so a question eligible for more
-    # than one type isn't grabbed by the wrong one, starving a later type.
-    claimed = set()
-    assigned_to = {t: [] for t in TrialType}
-    for raw_type in sorted(needed, key=lambda rt: len(pools[TrialType(rt)])):
-        t = TrialType(raw_type)
-        count = needed[raw_type]
-        for q_idx in pools[t]:
-            if q_idx in claimed:
-                continue
-            claimed.add(q_idx)
-            assigned_to[t].append(q_idx)
-            if len(assigned_to[t]) == count:
-                break
-        if len(assigned_to[t]) < count:
-            raise ValueError(
-                f"Sequence {seq_label} requests {count} {t.value!r} trial(s) "
-                f"but only {len(assigned_to[t])} unclaimed question(s) are "
-                f"eligible. validate_pool_sufficiency() should have caught "
-                f"this at startup — check questions.py and sequences.py "
-                f"stayed in sync."
-            )
-
-    if ROTATE_PROBLEMS:
-        for t in assigned_to:
+    assigned_to = _assign_problems(seq_label, sequence, questions, rng)
+    if rng:
+        for t in TrialType:
             rng.shuffle(assigned_to[t])
-    # else: leave in the deterministic order already established above.
+    # else: keep the deterministic ascending order.
 
     question_order = []
     variant_assignments = {}
     for trial_type in sequence:
         t = TrialType(trial_type)
-        q_idx = assigned_to[t].pop()
+        q_idx = assigned_to[t].pop(0)
         question_order.append(q_idx)
         variant_assignments[str(q_idx)] = t.value
 
