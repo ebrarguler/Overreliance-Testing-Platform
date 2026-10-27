@@ -212,9 +212,9 @@ def test_rotate_problems_false_picks_the_lowest_index_per_level(monkeypatch):
 
 def test_a_bank_that_cannot_be_balanced_is_rejected(synthetic_questions):
     synthetic_questions[12]["difficulty"] = "medium"  # only one hard problem left
-    with pytest.raises(ValueError, match="hard"):
+    with pytest.raises(ValueError, match="medium|hard"):
         build_trial_sequence(0, synthetic_questions, seed=1)
-    with pytest.raises(ValueError, match="hard"):
+    with pytest.raises(ValueError, match="medium|hard"):
         validate_pool_sufficiency(synthetic_questions)
 
 

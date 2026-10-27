@@ -8,7 +8,8 @@ participant (seeded), so a given question is not always shown at the same
 position, decoupling question identity from position.
 
 Active design: blocks with a mirrored first block
-(SEQUENCE_DESIGN_VERSION = "blocks_pq_v1")
+(PQ_DESIGN_VERSION = "blocks_pq_v1"
+SEQUENCE_DESIGN_VERSION = PQ_DESIGN_VERSION)
 -------------------------------------------------------------------
 Two orders, 14 positions in three blocks of 5, 5 and 4. Every block holds
 exactly one W and one IDK; the rest are C. Positions are numbered 1-14 in
@@ -55,7 +56,8 @@ I = TrialType.IDK.value
 # Config — edit here only.
 # ---------------------------------------------------------------------------
 
-SEQUENCE_DESIGN_VERSION = "blocks_pq_v1"
+PQ_DESIGN_VERSION = "blocks_pq_v1"
+SEQUENCE_DESIGN_VERSION = PQ_DESIGN_VERSION
 
 SEQUENCES = [
     # 1  2  3  4  5    6  7  8  9 10   11 12 13 14
@@ -323,6 +325,10 @@ def _assign_problems(seq_label, sequence, questions, rng):
         choices = [
             combo for combo in itertools.product(*at_level)
             if len(set(combo)) == len(combo)
+            # Every remaining problem must support C; otherwise a random
+            # draw could pass validation but fail for a different seed.
+            and all(i in combo or i in pools[TrialType.CORRECT]
+                    for i, q in enumerate(questions) if q.get("difficulty") == level)
         ]
         if not choices:
             raise ValueError(

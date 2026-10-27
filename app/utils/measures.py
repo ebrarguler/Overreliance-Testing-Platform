@@ -150,7 +150,7 @@ def compute_design_fields(realized_types, position_0idx, design_version):
         OPTION6_DESIGN_VERSION,
         OPTION6_PRIMARY_PROBE_POSITIONS,
         PQ_PROBE_POSITION,
-        SEQUENCE_DESIGN_VERSION,
+        PQ_DESIGN_VERSION,
         pq_probe_context,
         probe_context,
     )
@@ -166,7 +166,7 @@ def compute_design_fields(realized_types, position_0idx, design_version):
         )
 
     is_pq_probe = (
-        design_version == SEQUENCE_DESIGN_VERSION
+        design_version == PQ_DESIGN_VERSION
         and position_1idx == PQ_PROBE_POSITION
         and is_w
     )
