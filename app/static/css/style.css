@@ -633,6 +633,12 @@ h2 {
 	color: #888;
 }
 
+/* "Assistant: Thinking…" while a reply or the initial recommendation loads. */
+.chat-message.thinking {
+	color: #888;
+	font-style: italic;
+}
+
 /* Participant messages keep their line breaks (pasted code, Shift+Enter). */
 .user-message .message-body {
 	white-space: pre-wrap;

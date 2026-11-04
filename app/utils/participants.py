@@ -74,6 +74,15 @@ def _participants_collection():
         unique=True,
         partialFilterExpression={"identity.email": {"$type": "string"}},
     )
+    # One participant per consent form shown: a double-clicked "I Agree"
+    # sends two POSTs with the same session nonce, and the second must reuse
+    # the first's participant instead of creating (and allocating) another.
+    coll.create_index(
+        "consent_nonce",
+        name="consent_nonce_unique",
+        unique=True,
+        partialFilterExpression={"consent_nonce": {"$type": "string"}},
+    )
     return coll
 
 
@@ -81,12 +90,23 @@ def participated_before(prior_participation):
     return prior_participation != "no"
 
 
-def create_participant(site, prior_participation, identity=None):
+def create_participant(site, prior_participation, identity=None, consent_nonce=None):
     """
     Create a participant on consent. `identity` (UF only) is the start-page
     form: {email, uf_id, firstName, lastName, classSchool}. If that email
     already has a record (including a concurrent submit), registration is rejected.
+
+    `consent_nonce` identifies the consent form this browser session was
+    shown. A repeated submission of the same form (double click, resent
+    POST) returns the participant the first submission created, so it never
+    creates a second participant or a second order allocation.
     """
+    coll = _participants_collection()
+    if consent_nonce:
+        existing = coll.find_one({"consent_nonce": consent_nonce})
+        if existing is not None:
+            return existing
+
     record = {
         "participant_id": str(uuid.uuid4()),
         "site": site,
@@ -95,15 +115,21 @@ def create_participant(site, prior_participation, identity=None):
         "created_at": datetime.datetime.now(datetime.timezone.utc),
         "completed_at": None,
     }
+    if consent_nonce:
+        record["consent_nonce"] = consent_nonce
     if identity:
         record["identity"] = identity
 
-    coll = _participants_collection()
     while True:
         try:
             coll.insert_one(record)
             return record
         except DuplicateKeyError:
+            if consent_nonce:
+                # A concurrent submission of the same form won the race.
+                existing = coll.find_one({"consent_nonce": consent_nonce})
+                if existing is not None:
+                    return existing
             if identity:
                 existing = find_participant_by_email(identity["email"])
                 if existing is not None:

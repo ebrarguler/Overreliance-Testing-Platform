@@ -76,7 +76,7 @@ cannot see it: it is provided above. You simply are not confident enough in \
 your own reading of it to commit to an answer."""
 
 
-def _question_block(question):
+def _question_block(question, options=None):
     """The current trial's problem, verbatim, plus the options on screen.
 
     Included on IDK trials so the model can tell a general concept question
@@ -84,6 +84,8 @@ def _question_block(question):
     code it cannot reliably make that distinction, and it also cannot
     recognise a re-paste of the same problem. The options are included so it
     can recognise "is it [1, 2]?" as a request for a verdict on an option.
+    `options` is the participant's displayed order ("the second option"
+    must mean the same thing to both); the bank order when not given.
     """
     lines = [
         "The problem currently on the user's screen — this is the task they "
@@ -91,7 +93,7 @@ def _question_block(question):
         "",
         question["question"],
     ]
-    options = question.get("options") or []
+    options = options if options is not None else (question.get("options") or [])
     if options:
         lines.append("")
         lines.append("The answer options shown on their screen:")
@@ -114,20 +116,21 @@ RESPONSE_FORMAT_INSTRUCTIONS = (
 )
 
 
-def build_system_message(question, chat_prompt, trial_type):
+def build_system_message(question, chat_prompt, trial_type, options=None):
     """Assemble the system message for one follow-up chat turn.
 
     `trial_type` comes from the server-side assignment, not from anything the
     user typed. C/W share a natural assistant prompt with the code and options.
     IDK adds persistent abstention rules. All conditions share the same
-    response-format instructions.
+    response-format instructions. `options` is the order shown to this
+    participant (bank order when omitted).
     """
     if TrialType(trial_type) == TrialType.IDK:
         parts = [f"{chat_prompt['system_context']}\n\nQuestion Context: {chat_prompt['question_context']}\nStance: {chat_prompt['stance']}",
-                 _question_block(question), IDK_PERSISTENT_INSTRUCTIONS]
+                 _question_block(question, options), IDK_PERSISTENT_INSTRUCTIONS]
     else:
         parts = ["You are a helpful programming assistant. Respond naturally to the user's questions.",
-                 _question_block(question)]
+                 _question_block(question, options)]
 
     parts.append(RESPONSE_FORMAT_INSTRUCTIONS)
     return "\n\n".join(parts)

@@ -41,7 +41,7 @@ def main():
             app = create_app()
             app.config.update(TESTING=True, CSRF_ENABLED=False)
             c = app.test_client()
-            c.get('/start/uzh')
+            c.get('/')
             assert c.post('/consent', data={'consent':'on', 'adult':'yes','prior_participation':'no'}).status_code == 302
             with c.session_transaction() as sess:
                 pid = sess['participant_id']
@@ -79,7 +79,7 @@ def main():
             assert trial_store.turns_for(pid)[-1]['after_answer']
             assert c.get('/quiz').headers['Location'].endswith('/post_survey')
             c.delete_cookie(app.config['SESSION_COOKIE_NAME'])
-            assert c.get('/start/uzh').headers['Location'].endswith('/post_survey')
+            assert c.get('/').headers['Location'].endswith('/post_survey')
             with ThreadPoolExecutor(max_workers=8) as pool:
                 writes = list(pool.map(lambda i: trial_store.record_answer('race', 0, {'question_index':0,'answer':str(i)}), range(20)))
             assert sum(writes) == 1

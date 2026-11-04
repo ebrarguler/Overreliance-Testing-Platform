@@ -88,4 +88,14 @@
 		</div>
 	</form>
 </div>
+<script>
+  // Sending the form twice is harmless (the server reuses the participant the
+  // first request created), but disabling the button avoids the extra request.
+  (function () {
+    const form = document.querySelector(".consent-form");
+    const button = form.querySelector('button[type="submit"]');
+    form.addEventListener("submit", () => { button.disabled = true; });
+    window.addEventListener("pageshow", () => { button.disabled = false; });
+  })();
+</script>
 {% endblock %}

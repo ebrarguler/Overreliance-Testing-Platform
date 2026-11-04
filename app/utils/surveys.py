@@ -30,8 +30,24 @@ FINAL_ITEMS = {
 FINAL_TEXT_ITEMS = {
     "study_purpose_guess": "What do you think this study was investigating?",
     "assistant_observations": "Did you notice anything unusual about the assistant's answers? Please describe it, or write 'none'.",
+}
+
+# Part 2 of the final survey, shown only after part 1 is complete: these
+# items name the "I don't know" answers, so seeing them first would shape the
+# answers to the study-purpose and unusual-behaviour questions above.
+FINAL_CHANGE_ITEMS = {
+    "became_more_skeptical": "Over the course of the study, I became more skeptical of this assistant's answers",
+    "trust_increased": "Over the course of the study, my trust in this assistant increased",
+    "idk_changed_use": "When this assistant said it did not know an answer, this changed how I used it afterwards",
+    "idk_more_credible": "Because this assistant sometimes said it did not know, I believed its other answers more",
+}
+FINAL_CHANGE_TEXT_ITEMS = {
+    "usage_change": "Did the way you used the assistant change during the study? If so, please explain why. If not, write 'no'.",
     "other_tools": "Did you use any other tools, websites, people, or a code runner during the study? Please describe them, or write 'none'.",
 }
+
+FINAL_LIKERT_ITEMS = {**FINAL_ITEMS, **FINAL_CHANGE_ITEMS}
+FINAL_ALL_TEXT_ITEMS = {**FINAL_TEXT_ITEMS, **FINAL_CHANGE_TEXT_ITEMS}
 
 
 def valid_rating(name, value):

@@ -135,6 +135,11 @@ PRE_SURVEY_SCALES = {
     ],
 }
 
+# Final-survey part 2 (change over the study), exported item by item; not
+# part of any scale. Absent (blank) on records made before these items.
+FINAL_CHANGE_FIELDS = ["became_more_skeptical", "trust_increased", "idk_changed_use",
+                       "idk_more_credible", "usage_change"]
+
 # Final-survey scale definitions.
 # Key   → column prefix in participants.csv  (final_<key>_mean)
 # Value → list of item names as stored in final_survey_answers in MongoDB.
@@ -231,7 +236,8 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
         row[field] = json.dumps(value) if isinstance(value, list) else value
     row["n_resumes"] = doc.get("n_resumes", 0)
     row["runtime"] = json.dumps(doc.get("runtime", {}), sort_keys=True)
-    for field in ("trust_this_assistant", "trust_chatgpt", "study_purpose_guess", "assistant_observations", "other_tools"):
+    for field in ("trust_this_assistant", "trust_chatgpt", "study_purpose_guess", "assistant_observations", "other_tools",
+                  *FINAL_CHANGE_FIELDS):
         row[field] = final.get(field, "")
 
     for scale, items in PRE_SURVEY_SCALES.items():
@@ -293,6 +299,8 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
         covariates = record.get("covariates") or {}
         chat = record.get("chat") or {}
         clipboard = record.get("clipboard") or {}
+        visibility = record.get("visibility") or {}
+        runtime = _trial_runtime(record)
 
         rows.append({
             "participant_id": participant_id,
@@ -305,6 +313,12 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "problem_id": record.get("problem_id", q_idx),
             "difficulty": record.get("difficulty", ""),
             "trial_type": record.get("trial_type", record.get("variant_shown", "")),
+            # Which protocol produced this trial. Records under one design
+            # label can differ in problem rotation and chat prompt; never pool
+            # them without checking these (blank on records that predate them).
+            "rotation_scheme": doc.get("rotation_scheme", ""),
+            "protocol_version": runtime.get("protocol_version", ""),
+            "study_phase": runtime.get("study_phase", ""),
 
             "participant_answer": record.get("answer", ""),
             "correct_answer": record.get("correct_answer", ""),
@@ -321,6 +335,7 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "first_submit_at": timestamps.get("first_submit_at", ""),
             "final_submit_at": timestamps.get("final_submit_at", ""),
             "dwell_time_s": record.get("dwell_time_s", ""),
+            "recommendation_delay_ms": record.get("recommendation_delay_ms") or "",
             "idk_phrasing_id": record.get("idk_phrasing_id"),
 
             "initial_answer": revisions.get("initial_answer", ""),
@@ -330,6 +345,12 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "n_followup_turns": chat.get("n_turns", ""),
             "n_followup_turns_attempted": chat.get("n_turns_attempted", ""),
             "n_followup_errors": _count_followup_errors(chat.get("transcript")),
+            "n_late_turns": chat.get("n_late_turns", ""),
+            "n_messages_sent": chat.get("n_messages_sent", ""),
+
+            "n_hidden": visibility.get("n_hidden", ""),
+            "hidden_s": visibility.get("hidden_s", ""),
+            "n_blur": visibility.get("n_blur", ""),
 
             "n_copy": clipboard.get("n_copy", ""),
             "n_paste": clipboard.get("n_paste", ""),
@@ -353,9 +374,22 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "post_helpfulness": post.get("helpfulness", ""),
             "post_difficulty": post.get("difficulty", ""),
             "option_order": json.dumps(record.get("option_order", [])),
+            "option_order_scheme": record.get("option_order_scheme") or "",
+            "answer_option_place": record.get("answer_option_place", ""),
+            "correct_option_place": record.get("correct_option_place", ""),
+            "target_wrong_option_place": record.get("target_wrong_option_place", ""),
         })
 
     return rows
+
+
+def _trial_runtime(record):
+    """Runtime metadata (protocol_version, study_phase, …) logged with this
+    trial's initial recommendation; {} on records that predate it."""
+    for entry in (record.get("chat") or {}).get("transcript") or []:
+        if entry.get("is_initial_recommendation"):
+            return entry
+    return {}
 
 
 def _count_followup_errors(transcript):
@@ -420,6 +454,7 @@ def build_chat_rows(doc: dict, participant_id: int) -> list[dict]:
                 "error_reason": entry.get("error_reason", ""),
                 "shown_to_participant": entry.get("shown_to_participant", ""),
                 "timestamp": entry.get("timestamp", ""),
+                "sent_at": entry.get("sent_at", ""),
                 "user_message": entry.get("user_message", ""),
                 "assistant_message": entry.get("assistant_message") or "",
                 "raw_completion": entry.get("raw_completion") or "",
@@ -540,13 +575,42 @@ def compute_aggregates(all_trial_rows: list[dict]) -> dict:
     return aggregates
 
 
+def protocol_label(row: dict) -> str:
+    """Rotation scheme and chat protocol of a trial row, e.g.
+    "uniform_random_v1 | durable_natural_v1" ("none" where not recorded)."""
+    return f"{row.get('rotation_scheme') or 'none'} | {row.get('protocol_version') or 'none'}"
+
+
 def compute_aggregates_by_design(all_trial_rows: list[dict]) -> dict:
     """compute_aggregates() run separately for each design_group; designs
-    are never pooled into one summary."""
+    are never pooled into one summary.
+
+    One design label can cover several protocols (problem rotation, chat
+    prompt). Each summary lists them under "protocols"; when there is more
+    than one, it carries a warning and a per-protocol breakdown, so pilot
+    records from an earlier protocol are never silently pooled.
+    """
     groups: dict[str, list[dict]] = {}
     for row in all_trial_rows:
         groups.setdefault(row["design_group"], []).append(row)
-    return {group: compute_aggregates(rows) for group, rows in sorted(groups.items())}
+    result = {}
+    for group, rows in sorted(groups.items()):
+        summary = compute_aggregates(rows)
+        by_protocol: dict[str, list[dict]] = {}
+        for row in rows:
+            by_protocol.setdefault(protocol_label(row), []).append(row)
+        summary["protocols"] = sorted(by_protocol)
+        if len(by_protocol) > 1:
+            summary["protocol_warning"] = (
+                "This design group pools several rotation schemes or chat protocols; "
+                "use by_protocol or filter trials.csv on rotation_scheme/protocol_version."
+            )
+            summary["by_protocol"] = {
+                label: compute_aggregates(protocol_rows)
+                for label, protocol_rows in sorted(by_protocol.items())
+            }
+        result[group] = summary
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +630,7 @@ PARTICIPANT_FIELDS = (
     + [f"pre_{s}_mean" for s in PRE_SURVEY_SCALES]
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
     + ["total_duration_s", "n_resumes", "runtime", "trust_this_assistant", "trust_chatgpt",
-       "study_purpose_guess", "assistant_observations", "other_tools"] + DEMOGRAPHIC_FIELDS
+       "study_purpose_guess", "assistant_observations", "other_tools", *FINAL_CHANGE_FIELDS] + DEMOGRAPHIC_FIELDS
 )
 
 TRIAL_FIELDS = [
@@ -615,6 +679,10 @@ TRIAL_FIELDS = [
     "post_confidence",
     "post_trust",
     "post_helpfulness", "post_difficulty", "option_order",
+    "option_order_scheme", "answer_option_place", "correct_option_place", "target_wrong_option_place",
+    "rotation_scheme", "protocol_version", "study_phase",
+    "n_late_turns", "n_messages_sent", "n_hidden", "hidden_s", "n_blur",
+    "recommendation_delay_ms",
 ]
 
 CHAT_FIELDS = [
@@ -634,6 +702,7 @@ CHAT_FIELDS = [
     "error_reason",
     "shown_to_participant",
     "timestamp",
+    "sent_at",
     "user_message",
     "assistant_message",
     "raw_completion", "mentioned_options",
@@ -736,14 +805,17 @@ def write_attrition(output_dir, design=None):
             continue
         records = trial_store.trials_for(pid)
         rows.append({"participant_uuid": pid, "site": part.get("site"), "design_group": group,
+                     # Lets dropout be compared between orders (P/Q).
+                     "sequence_label": assignment.get("sequence_label", ""),
+                     "rotation_scheme": assignment.get("rotation_scheme", ""),
                      "created_at": str(part.get("created_at", "")),
                      "completed_at": str(part.get("completed_at") or ""),
                      "n_resumes": part.get("n_resumes", 0),
                      "answered": len(records), "rated": sum(bool(r.get("rating")) for r in records),
                      "data_use": part.get("data_use", "pending"),
                      "completed": bool(part.get("completed_at"))})
-    fields = ["participant_uuid", "site", "design_group", "created_at", "completed_at", "n_resumes",
-              "answered", "rated", "data_use", "completed"]
+    fields = ["participant_uuid", "site", "design_group", "sequence_label", "rotation_scheme",
+              "created_at", "completed_at", "n_resumes", "answered", "rated", "data_use", "completed"]
     with (output_dir / "attrition.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()

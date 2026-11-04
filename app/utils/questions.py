@@ -263,6 +263,10 @@ questions = [
         'question': 'What is the output of:\nx = [1, 2] + [2, 3]\ny = set(x)\nprint(len(x), len(y))',
         'options': ['4, 4', '4, 3', '3, 3', '3, 4'],
         'correct': '4, 3',
+        # Python prints `4 3`, not the option text "4, 3". The IDK filter and
+        # the option coder must recognise both (provenance.option_mentions).
+        # The option texts stay as in the UF study.
+        'printed_forms': {'4, 4': ['4 4'], '4, 3': ['4 3'], '3, 3': ['3 3'], '3, 4': ['3 4']},
         'concept_tags': ['list_concatenation', 'sets'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -584,6 +588,11 @@ for _i, _text in enumerate(IDK_ABSTENTIONS):
         _structural_issues.append(f"IDK_ABSTENTIONS[{_i}] contains a digit ({_text!r})")
 
 for _q in questions:
+    for _option in _q.get('printed_forms', {}):
+        if _option not in _q['options']:
+            _structural_issues.append(
+                f"question {_q['id']}: printed_forms key {_option!r} is not an option"
+            )
     for _t in TrialType:
         _variant = _q['variants'].get(_t.value)
         if _variant is None:

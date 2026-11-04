@@ -27,26 +27,38 @@ def prompt_hash(prompt):
     return hashlib.sha256(prompt.encode()).hexdigest()
 
 
-def option_mentions(text, options):
+def _forms(option, printed_forms):
+    """The option text plus any other way the program prints it (e.g. the
+    option "4, 3" is printed as `4 3`)."""
+    return [option, *((printed_forms or {}).get(option, []))]
+
+
+def option_mentions(text, options, printed_forms=None):
     """Literal mentions only, never treated as semantic endorsement.
 
     A reply can quote or reject an option; human coding of the retained text
-    is required to establish an endorsed answer reliably.
+    is required to establish an endorsed answer reliably. `printed_forms`
+    (question["printed_forms"]) maps an option to the program's own printed
+    form when it differs from the option text; either form counts.
     """
     import re
-    return [opt for opt in options if re.search(r"(?<!\w)" + re.escape(opt) + r"(?!\w)", text)]
+    return [
+        opt for opt in options
+        if any(re.search(r"(?<!\w)" + re.escape(form) + r"(?!\w)", text)
+               for form in _forms(opt, printed_forms))
+    ]
 
 
-def stated_option(text, options):
+def stated_option(text, options, printed_forms=None):
     """Conservative explicit-output coding; unresolved prose needs human review."""
     import re
     prefix = r"(?:the (?:correct )?answer is|the output is|(?:it|this|the code) (?:prints|outputs))\s*[:=]?\s*"
     matches = []
+    bare = text.strip().strip('`"\' .')
     for option in sorted(options, key=len, reverse=True):
-        pattern = prefix + r"[`\"']?" + re.escape(option) + r"[`\"']?(?=\s*(?:[.;\n]|$))"
-        if re.search(pattern, text, flags=re.IGNORECASE):
-            matches.append(option)
-    if text.strip().strip('`"\' .') in options:
-        matches.append(text.strip().strip('`"\' .'))
+        for form in _forms(option, printed_forms):
+            pattern = prefix + r"[`\"']?" + re.escape(form) + r"[`\"']?(?=\s*(?:[.;\n]|$))"
+            if re.search(pattern, text, flags=re.IGNORECASE) or bare == form:
+                matches.append(option)
     unique = set(matches)
     return next(iter(unique)) if len(unique) == 1 else None

@@ -54,7 +54,7 @@ UF_FORM = {
 
 
 def _enter(client, site="uzh", prior="no", form=None):
-    client.get(f"/start/{site}")
+    client.get("/" if site == "uzh" else f"/start/{site}")
     if site == "uf":
         resp = client.post("/validate_email", data=form or UF_FORM)
         if resp.status_code != 302 or not resp.headers["Location"].endswith("/consent"):
@@ -83,7 +83,7 @@ IDENTITY_FIELDS = ('name="email"', 'name="id_number"', 'name="firstName"',
 
 
 def test_uzh_start_page_asks_no_personal_data(client):
-    html = client.get("/start/uzh").get_data(as_text=True)
+    html = client.get("/").get_data(as_text=True)
     for field in IDENTITY_FIELDS + ('name="prior_participation"',):
         assert field not in html
 
@@ -97,21 +97,35 @@ def test_uf_start_page_is_the_main_branch_form(client):
 
 
 def test_site_specific_study_information(client):
-    assert "University of Zurich" in client.get("/start/uzh").get_data(as_text=True)
+    assert "University of Zurich" in client.get("/").get_data(as_text=True)
     assert "University of Zurich" not in client.get("/start/uf").get_data(as_text=True)
 
 
-def test_unknown_site_and_bare_root_do_not_start_the_study(client, db):
+def test_unknown_site_does_not_start_the_study(client, db):
     assert client.get("/start/elsewhere").status_code == 404
-    assert "link you received" in client.get("/").get_data(as_text=True)
     resp = client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
     assert resp.headers["Location"].endswith("/")
     assert not db.get("participants") or not db["participants"].docs
 
 
+def test_bare_address_is_the_uzh_entry_and_old_uzh_link_redirects(client, db):
+    html = client.get("/").get_data(as_text=True)
+    assert "University of Zurich" in html
+    with client.session_transaction() as sess:
+        assert sess["site"] == "uzh"
+    resp = client.get("/start/uzh")
+    assert resp.status_code == 302 and resp.headers["Location"].endswith("/")
+    # UF keeps its own link.
+    assert "University of Zurich" not in client.get("/start/uf").get_data(as_text=True)
+    with client.session_transaction() as sess:
+        assert sess["site"] == "uf"
+    # A UF session sent "home" goes back to the UF link, not to UZH.
+    assert client.get("/").headers["Location"].endswith("/start/uf")
+
+
 def test_question_is_on_every_consent_page(client):
     for site in ("uzh", "uf"):
-        client.get(f"/start/{site}")
+        client.get("/" if site == "uzh" else f"/start/{site}")
         if site == "uf":
             client.post("/validate_email", data=UF_FORM)
         html = client.get("/consent").get_data(as_text=True)
@@ -121,14 +135,14 @@ def test_question_is_on_every_consent_page(client):
 
 
 def test_nothing_is_stored_before_consent(client, db):
-    client.get("/start/uzh")
+    client.get("/")
     client.get("/consent")
     assert client.get_cookie(PARTICIPANT_COOKIE) is None
     assert not db.get("participants") or not db["participants"].docs
 
 
 def test_declining_stores_nothing(client, db):
-    client.get("/start/uzh")
+    client.get("/")
     resp = client.post("/consent", data={"prior_participation": "no"})
     assert resp.headers["Location"].endswith("/declined")
     assert not db.get("participants") or not db["participants"].docs
@@ -136,7 +150,7 @@ def test_declining_stores_nothing(client, db):
 
 
 def test_prior_participation_answer_is_required(client, db):
-    client.get("/start/uzh")
+    client.get("/")
     resp = client.post("/consent", data={"consent": "on", "adult": "yes"})
     assert resp.status_code == 400
     assert not db.get("participants") or not db["participants"].docs
@@ -180,7 +194,7 @@ def test_same_browser_resumes_where_it_left_off(client, db):
     with client.session_transaction() as sess:
         first = (sess["participant_id"], sess["question_order"])
 
-    resp = client.get("/start/uzh")
+    resp = client.get("/")
     assert resp.headers["Location"].endswith("/pre_survey")
     with client.session_transaction() as sess:
         assert (sess["participant_id"], sess["question_order"]) == first
@@ -193,7 +207,7 @@ def test_expired_session_keeps_participant_and_assignment(client, db):
         first = (sess["participant_id"], sess["question_order"], sess["sequence_label"])
     client.delete_cookie("session")  # session lost, participant cookie kept
 
-    resp = client.get("/start/uzh")
+    resp = client.get("/")
     assert resp.headers["Location"].endswith("/demographics")
     with client.session_transaction() as sess:
         assert (sess["participant_id"], sess["question_order"], sess["sequence_label"]) == first
@@ -207,7 +221,7 @@ def test_completed_browser_is_turned_away(client, db):
     _finish(client)
     assert db["participants"].docs[0]["completed_at"] is not None
 
-    for url in ("/start/uzh", "/start/uf"):
+    for url in ("/", "/start/uf"):
         html = client.get(url).get_data(as_text=True)
         assert "already been completed" in html
     assert len(db["participants"].docs) == 1
@@ -246,7 +260,7 @@ def test_legacy_unique_email_indexes_are_dropped(client, db):
 
 
 def test_each_site_gets_its_own_consent_page(client):
-    client.get("/start/uzh")
+    client.get("/")
     uzh = client.get("/consent").get_data(as_text=True)
     assert "Informed Consent" in uzh
     assert "SONA" not in uzh
@@ -260,7 +274,7 @@ def test_each_site_gets_its_own_consent_page(client):
 
 def test_unconsented_session_with_participant_does_not_loop(client, db):
     """Sessions from the earlier flow created the participant before consent."""
-    client.get("/start/uzh")
+    client.get("/")
     with client.session_transaction() as sess:
         sess["participant_id"] = "legacy-id"
 
@@ -270,7 +284,7 @@ def test_unconsented_session_with_participant_does_not_loop(client, db):
 
     resp = client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
     assert resp.headers["Location"].endswith("/demographics")
-    assert client.get("/start/uzh").headers["Location"].endswith("/demographics")
+    assert client.get("/").headers["Location"].endswith("/demographics")
 
 
 # --- UF: start-page identity form -------------------------------------------

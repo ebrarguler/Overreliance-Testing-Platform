@@ -248,6 +248,10 @@ def assemble(participant_id, order):
             "n_turns": sum(not t.get("is_error", False) and not t.get("after_answer", False) for t in followups),
             "n_turns_attempted": sum(not t.get("after_answer", False) for t in followups),
             "n_late_turns": sum(t.get("after_answer", False) for t in followups),
+            # Every message the participant sent on this trial, including
+            # failed and late-reply turns. /chat refuses messages once the
+            # answer is recorded, so all of them were sent before answering.
+            "n_messages_sent": len(followups),
         }
         answers[q] = answer
         times[q] = answer.get("dwell_time_s", 0)

@@ -59,7 +59,7 @@
 
 			<div class="info-block">
                 <h3>What is recorded and shared</h3>
-                <p>We record your survey answers, selected answers, timing, changes to selections, chat messages and replies, and counts of copying and pasting. UZH does not ask for your name, email, or student ID. Please do not enter personal information in chat.</p>
+                <p>We record your survey answers, selected answers, timing, changes to selections, chat messages and replies, counts of copying and pasting, and how often and how long you leave the study page during a question. UZH does not ask for your name, email, or student ID. Please do not enter personal information in chat.</p>
                 <p>Your chat messages and the programming problem are sent to OpenAI to generate replies. We do not send your demographic answers or participant code in the model prompt.</p>
                 <p>Some study details will be explained after the final survey. You can then decide whether your responses may be used. You will receive a code to withdraw them from research analysis{% if withdrawal_deadline %} until {{ withdrawal_deadline }}{% endif %}.</p>
                 <p>{{ research_note }}</p>
@@ -86,4 +86,14 @@
 		</div>
 	</form>
 </div>
+<script>
+  // Sending the form twice is harmless (the server reuses the participant the
+  // first request created), but disabling the button avoids the extra request.
+  (function () {
+    const form = document.querySelector(".consent-form");
+    const button = form.querySelector('button[type="submit"]');
+    form.addEventListener("submit", () => { button.disabled = true; });
+    window.addEventListener("pageshow", () => { button.disabled = false; });
+  })();
+</script>
 {% endblock %}

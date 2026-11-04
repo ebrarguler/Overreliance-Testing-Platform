@@ -42,9 +42,12 @@ their site (random when tied), so each site is balanced on its own.
 
 The primary probe is the W at position 4, the first W for everyone: in P it
 comes before any IDK, in Q immediately after the first IDK. It tests IDK
-spillover (H4) at a matched position, with the same rotated problem pool
-and the same number of earlier W trials. Each participant contributes one
-probe trial, so this is a between-participant comparison (§8.7).
+spillover (H2) at a matched position, with the same rotated problem pool
+and the same number of earlier W trials. The contrast is position 3: a
+correct recommendation in P, an IDK in Q. So Q has also seen one correct
+recommendation fewer, and its IDK directly precedes the probe; describe the
+comparison that way. Each participant contributes one probe trial, so this
+is a between-participant comparison (§8.7).
 
 ### 1.2 Option 6 orders (`sequence_design_version = "option6_v1"`, earlier)
 
@@ -152,6 +155,7 @@ Mongo document (indexed by problem id, not presentation position — see
 | `ai_endorsed_answer` | str or null | See §2 |
 | `aligned_with_ai` | bool or null | `answer == ai_endorsed_answer`; null when `ai_endorsed_answer` is null |
 | `reliance_code` | `ACCEPTED`\|`REJECTED`\|`NOT_APPLICABLE` | See §2 |
+| `chat.transcript[].sent_at` | ISO datetime | Server receipt time of the participant's message; `timestamp` on the same entry is when the reply was logged. Absent on older records |
 | `timestamps.served_at` | ISO datetime | When the trial was first rendered (`GET /quiz`) |
 | `timestamps.first_interaction_at` | ISO datetime or null | First client-side interaction of any kind (radio click, chat send, recommendation click) |
 | `timestamps.first_submit_at` | ISO datetime or null | First answer-option selection (see §4 — this is *not* a server round-trip) |
@@ -173,6 +177,12 @@ Mongo document (indexed by problem id, not presentation position — see
 | `pq_probe_context` | str or null | `"before_first_idk"` (order P) or `"after_first_idk"` (order Q) on that probe; null otherwise. Absent on older records |
 | `is_primary_option6_probe` | bool | True only for `confident_wrong` trials at positions 8 and 13 when `sequence_design_version == "option6_v1"`. Absent on older records |
 | `option6_probe_context` | str or null | `"immediate_after_idk"` or `"one_correct_between"` on primary probes; null otherwise. Absent on older records |
+| `option_order` | list[str] | Options in the order shown. Under `option_order_scheme = "seeded_shuffle_v1"` a per-participant random order from the assignment seed (stored as `option_orders` in the assignment and `users` record); before that, always the bank order |
+| `answer_option_place`, `correct_option_place`, `target_wrong_option_place` | int 1–4 or null | Where (1 = top) the chosen option, the correct option and the W target were shown. Use to separate primacy from following the AI. Absent on older records |
+| `visibility.n_hidden`, `visibility.hidden_s`, `visibility.n_blur` | int, float, int | Client-side, reset on a reload: times the tab was hidden during the trial, total seconds hidden, and times the page lost focus (also catches a second window beside the browser, but noisier). Says nothing about why. Absent on older records |
+| `chat.n_messages_sent` | int | Every message sent on the trial, including failed turns and turns whose reply arrived after the answer. `/chat` refuses messages once the answer is recorded, so all were sent before answering. Use for counting messages (e.g. answer-seeking, H3); use `n_turns` for replies seen before answering |
+| `recommendation_delay_ms` | int or null | Milliseconds between requesting the initial recommendation and showing it: a random 1.5–3.5 s wait on the page (so scripted text does not appear faster than a model reply), plus any network time. Null when not measured, e.g. after a reload. Absent on older records |
+| `chat.n_late_turns` | int | Follow-ups whose reply was logged after the answer (`after_answer`) |
 | `confidence_rating` | str or null | Only populated when `ENABLE_TRIAL_CONFIDENCE_RATING=true`; null otherwise (default) — see §7 |
 
 ---
@@ -513,6 +523,12 @@ on sample size and effect size.
 
 ### 8.9 Designs are summarised separately
 
+Within one design group, `aggregates.json` lists the rotation schemes and
+chat protocols it contains under `protocols` (`"<rotation_scheme> |
+<protocol_version>"`). When there is more than one, the summary carries a
+`protocol_warning` and a `by_protocol` breakdown; `trials.csv` carries
+`rotation_scheme`, `protocol_version` and `study_phase` on every row.
+
 `scripts/export_data.py` computes every metric above once per
 `design_group` (`blocks_pq_v1`, `option6_v1` or `legacy_unversioned`) in
 `aggregates.json` and never pools them. `--design <group>` restricts all
@@ -549,3 +565,19 @@ Answers/ratings are stored per participant/position and exported with identity j
 `mentioned_options` records literal mentions. `stated_option` is a conservative explicit-output match, not a full semantic classifier. Unresolved replies need human coding. `policy_filter_reason` identifies IDK outputs replaced by an abstention; raw output is retained separately. Replies marked `after_answer` are retained but excluded from pre-answer follow-up counts. Decide these exclusions and treatment of filtered replies before analysis.
 
 Completed new records require a keep decision for export; pending/withdrawn records are omitted. `attrition.csv` reports incomplete progress separately. Raw live-evaluation transcripts and research exports are ignored by Git.
+
+
+## Pre-data-collection review fixes (2026-11-04)
+
+- **Option order.** New assignments store `option_orders` (one random order per question, from the assignment seed, `option_order_scheme = "seeded_shuffle_v1"`). The page, the chat prompt's option list and `option_order` all use it. In the bank the W target was option A for 8 of 14 problems, so analyses of earlier records should treat place as a covariate.
+- **Printed forms.** Problem 0's options are written `"4, 3"` but Python prints `4 3`. `printed_forms` maps each option to its printed form; the IDK filter, `mentioned_options` and `stated_option` match either. The option texts are unchanged.
+- **Consent nonce.** A repeated submission of the same consent form (same session) returns the first participant instead of creating a second one with its own P/Q slot. `participants.consent_nonce` is unique.
+- **Exports.** `trials.csv` gains `rotation_scheme`, `protocol_version`, `study_phase`, option places, `n_messages_sent`, `n_late_turns` and the visibility counts; `chat_messages.csv` gains `sent_at`; `attrition.csv` gains `sequence_label` and `rotation_scheme`, so dropout can be compared between P and Q.
+- **Debrief.** The answer list is hidden unless `DEBRIEF_SHOW_ANSWERS=true` (set it after recruitment closes). The page asks participants not to share the study details.
+- **Hypothesis numbering.** The position-4 probe hypothesis is now H2 (formerly "H4").
+
+## Entry, final survey part 2 and demographics (2026-11-05)
+
+- **Entry.** `/` is the UZH entry page; `/start/uzh` redirects to it. UF keeps `/start/uf` (not in active use).
+- **Final survey part 2.** After part 1 (the 17 original items plus the study-purpose and unusual-behaviour questions) is complete, the page shows part 2: `became_more_skeptical`, `trust_increased`, `idk_changed_use`, `idk_more_credible` (1–7 agreement), `usage_change` ("Did the way you used the assistant change during the study? If so, please explain why.") and `other_tools`. Both parts are submitted together and stored in `final_survey_answers`; `participants.csv` exports the new items one by one. They belong to no scale. `trust_increased` runs opposite to `became_more_skeptical`; do not average them without reverse-coding. These are retrospective self-reports, not measures of behaviour.
+- **Demographics.** UZH records carry no `ethnicity` field (it was already not asked at UZH). Ethnic origin is specially protected personal data under the Swiss FADP and the Zurich IDG, and no analysis needs it. The age field's minimum is now 18, matching the consent.

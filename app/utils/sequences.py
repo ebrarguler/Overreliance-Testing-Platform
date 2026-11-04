@@ -21,9 +21,11 @@ the comments and constants below; the lists are 0-indexed.
 
 The orders differ only at positions 3 and 5. Position 4 is the first W for
 everyone: in P it comes before any IDK, in Q right after the first IDK. That
-W is the primary probe for IDK spillover (H4): same position, same rotated
-problem pool, same number of earlier W trials, only prior IDK exposure
-differs. From position 6 on, both orders are identical.
+W is the primary probe for IDK spillover (H2): same position, same rotated
+problem pool, same number of earlier W trials. What differs is position 3:
+a correct recommendation in P, an IDK in Q. So Q has seen one IDK and one
+correct recommendation fewer, and the IDK comes right before the probe.
+From position 6 on, both orders are identical.
 
 To change the trial-type design:
   - Edit SEQUENCES / SEQUENCE_LABELS and bump SEQUENCE_DESIGN_VERSION, so
@@ -450,3 +452,34 @@ def build_trial_sequence(seq_index, questions, seed=None):
         variant_assignments[str(q_idx)] = t.value
 
     return question_order, variant_assignments, seq_label, seed
+
+
+# ---------------------------------------------------------------------------
+# Answer-option order
+# ---------------------------------------------------------------------------
+
+# New assignments show each question's options in a per-participant random
+# order. In the bank the wrong target is option A for 8 of 14 problems, so a
+# fixed order would mix "followed the AI" with "picked the first option".
+# Assignments made before this have no stored order and show the bank order.
+OPTION_ORDER_SCHEME = "seeded_shuffle_v1"
+
+
+def build_option_orders(questions, seed):
+    """
+    Display order of every question's options for one participant, keyed by
+    str(question index).
+
+    Uses its own RNG stream derived from the assignment seed, so the problem
+    draw for a given seed is unchanged. Each option is equally likely at each
+    place. Without a seed (ROTATE_PROBLEMS off) every question keeps its bank
+    order.
+    """
+    rng = random.Random(f"option-order:{seed}") if seed is not None else None
+    orders = {}
+    for q_idx, question in enumerate(questions):
+        order = list(question["options"])
+        if rng is not None:
+            rng.shuffle(order)
+        orders[str(q_idx)] = order
+    return orders

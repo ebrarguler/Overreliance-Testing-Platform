@@ -51,7 +51,9 @@ from .sequences import (
     SEQUENCES,
     ROTATE_PROBLEMS,
     ROTATION_SCHEME,
+    OPTION_ORDER_SCHEME,
     build_trial_sequence,
+    build_option_orders,
 )
 
 # Tie-breaking randomness. Module-level so tests can substitute a seeded one.
@@ -162,6 +164,10 @@ def _record_to_result(record):
         # Absent on assignments made before problems were randomized across
         # all three types (rotation within type only).
         "rotation_scheme": record.get("rotation_scheme"),
+        # Absent on assignments made before options were shuffled; those
+        # show every question's options in the bank order.
+        "option_orders": record.get("option_orders"),
+        "option_order_scheme": record.get("option_order_scheme"),
     }
 
 
@@ -212,6 +218,8 @@ def get_or_create_assignment(participant_id, questions, site):
         "seed": seed,
         "rotate_problems": ROTATE_PROBLEMS,
         "rotation_scheme": ROTATION_SCHEME,
+        "option_orders": build_option_orders(questions, seed),
+        "option_order_scheme": OPTION_ORDER_SCHEME if seed is not None else None,
         "assigned_at": datetime.datetime.utcnow(),
     }
 

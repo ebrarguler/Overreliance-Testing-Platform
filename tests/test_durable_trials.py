@@ -53,7 +53,7 @@ def test_resume_recovers_answer_waiting_for_rating(client):
     trial_store.save_survey_part(state['participant_id'], 'pre_survey', state['pre_survey_data'])
     _answer(client)
     client.delete_cookie('session')
-    response = client.get('/start/uzh')
+    response = client.get('/')
     assert response.headers['Location'].endswith('/post_survey')
     assert _state(client)['question_index'] == 0
     trial_post(client, '/post_survey', data=RATING)

@@ -3,6 +3,7 @@ import os
 import time
 import datetime
 import logging
+import secrets
 from flask import (
     Blueprint,
     render_template,
@@ -18,7 +19,10 @@ from .utils import trial_store, debrief as debrief_store
 from .utils import db as database
 from .utils.chat_safety import filter_idk_reply
 from .utils.security import csrf_token, validate_csrf
-from .utils.surveys import POST_ITEMS, FINAL_ITEMS, FINAL_TEXT_ITEMS, LIKERT, valid_rating
+from .utils.surveys import (
+    POST_ITEMS, FINAL_ITEMS, FINAL_TEXT_ITEMS, FINAL_CHANGE_ITEMS, FINAL_CHANGE_TEXT_ITEMS,
+    FINAL_LIKERT_ITEMS, FINAL_ALL_TEXT_ITEMS, LIKERT, valid_rating,
+)
 from .utils.provenance import runtime_metadata, prompt_hash, option_mentions, stated_option
 from .utils.participants import (
     PARTICIPANT_COOKIE,
@@ -34,7 +38,7 @@ from .utils.participants import (
     mark_completed,
     note_resume,
 )
-from .utils.sites import get_site
+from .utils.sites import DEFAULT_SITE, get_site
 from .utils.assignment import get_or_create_assignment, get_assignment
 from .utils.trial_types import is_misleading
 from .utils.chat_prompting import build_system_message
@@ -103,6 +107,29 @@ def _load_assignment(participant_id, site):
     # Which IDK wording each IDK encounter uses; derived from the stored seed,
     # so a resumed participant gets the same order.
     session["idk_phrasing_order"] = idk_phrasing_order(assignment["seed"])
+    # Per-participant option order (None on assignments made before options
+    # were shuffled; those show the bank order).
+    session["option_orders"] = assignment.get("option_orders")
+    session["option_order_scheme"] = assignment.get("option_order_scheme")
+
+
+def _displayed_options(q_index):
+    """The question's options in the order this participant sees them."""
+    bank = list(questions[q_index]["options"])
+    stored = (session.get("option_orders") or {}).get(str(q_index))
+    if stored is None:
+        return bank
+    if sorted(stored) != sorted(bank):
+        # The bank's options changed after this assignment was made. Show
+        # what the bank now holds rather than an option that no longer exists.
+        logger.warning("stored option order for question %s no longer matches the bank", q_index)
+        return bank
+    return list(stored)
+
+
+def _option_place(options, value):
+    """1-based place of `value` in the displayed options, or None."""
+    return options.index(value) + 1 if value in options else None
 
 
 def _current_idk_phrasing():
@@ -260,17 +287,25 @@ def prevent_stale_pages(response):
 
 @main_bp.route("/")
 def index():
-    # There is no site-neutral entry: participants arrive through their
-    # site's link. Mid-study "home" links land back on it.
+    # The bare address is the UZH entry page (DEFAULT_SITE). A session that
+    # belongs to another site (UF, not in active use) goes back to that
+    # site's own link. Mid-study "home" links land here too.
     site_key = session.get("site")
-    if get_site(site_key):
+    if get_site(site_key) and site_key != DEFAULT_SITE:
         return redirect(url_for("main.start", site_key=site_key))
-    return render_template("missing_link.html")
+    return _enter_site(DEFAULT_SITE)
 
 
 @main_bp.route("/start/<site_key>")
 def start(site_key):
     site_key = site_key.lower()
+    if site_key == DEFAULT_SITE:
+        # UZH enters through the bare address; old /start/uzh links land there.
+        return redirect(url_for("main.index"))
+    return _enter_site(site_key)
+
+
+def _enter_site(site_key):
     site = get_site(site_key)
     if site is None:
         return render_template("missing_link.html"), 404
@@ -371,15 +406,25 @@ def collect_consent():
         # session into the participant record and are dropped from the session.
         try:
             participant = create_participant(
-                site_key, prior, identity=session.pop("identity", None)
+                site_key, prior, identity=session.pop("identity", None),
+                consent_nonce=_consent_nonce(),
             )
         except ValueError:
             return render_template("resume_required.html"), 409
         return _attach_participant(participant)
 
+    _consent_nonce()
     return render_template(
         site["consent_template"], prior_options=PRIOR_PARTICIPATION_OPTIONS
     )
+
+
+def _consent_nonce():
+    """Random id of the consent form shown in this session (see
+    participants.create_participant). A fresh session gets a new one."""
+    if not session.get("consent_nonce"):
+        session["consent_nonce"] = secrets.token_urlsafe(16)
+    return session["consent_nonce"]
 
 
 def _render_demographics(site, error=None):
@@ -413,7 +458,6 @@ def collect_demographics():
         demographics_data = {
             "age_category": request.form.get("age"),
             "gender": request.form.get("gender"),
-            "ethnicity": request.form.getlist("ethnicity") if session.get("site") == "uf" else [],
             "ai_usage": request.form.get("ai_experience"),
             "ai_frequency": request.form.get("ai_frequency"),
             "ai_use_type": request.form.getlist("ai_use_type"),
@@ -423,6 +467,12 @@ def collect_demographics():
             "gpa": gpa,
             "gpa_scale": site["grade_scale"],
         }
+        # Ethnic origin is specially protected data under Swiss data
+        # protection law (federal FADP and the Zurich IDG that applies to
+        # UZH), and no analysis needs it. Only the UF form (inactive) asks it;
+        # UZH records carry no ethnicity field at all.
+        if session.get("site") == "uf":
+            demographics_data["ethnicity"] = request.form.getlist("ethnicity")
         if not trial_store.save_survey_part(session["participant_id"], "demographics", demographics_data):
             return redirect(_resume_url())
         session["demographics"] = demographics_data
@@ -523,10 +573,20 @@ def quiz():
             if trial_confidence_rating_enabled():
                 confidence_rating = request.form.get("trial_confidence")
 
+            displayed_options = _displayed_options(current_q_index)
+            target_wrong_answer = get_ai_endorsed_answer(question, "confident_wrong")
+
             answer_data = {
                 "question_index": current_q_index,
                 "problem_id": question["id"],
-                "option_order": list(question["options"]),
+                # The order shown on screen, and where (1 = top) the chosen,
+                # correct and wrong-target options were, so primacy can be
+                # separated from following the AI.
+                "option_order": displayed_options,
+                "option_order_scheme": session.get("option_order_scheme"),
+                "answer_option_place": _option_place(displayed_options, final_answer),
+                "correct_option_place": _option_place(displayed_options, question["correct"]),
+                "target_wrong_option_place": _option_place(displayed_options, target_wrong_answer),
                 "position": position_0idx + 1,
                 "section": section_for_position(position_0idx + 1),
                 "sequence_id": session.get("sequence_label"),
@@ -546,8 +606,8 @@ def quiz():
                 "is_correct": final_answer == question["correct"],
 
                 "ai_endorsed_answer": ai_endorsed_answer,
-                "target_wrong_answer": get_ai_endorsed_answer(question, "confident_wrong"),
-                "chose_target_wrong_answer": final_answer == get_ai_endorsed_answer(question, "confident_wrong"),
+                "target_wrong_answer": target_wrong_answer,
+                "chose_target_wrong_answer": final_answer == target_wrong_answer,
                 "aligned_with_ai": aligned_with_ai,
                 "reliance_code": reliance_code,
 
@@ -565,6 +625,11 @@ def quiz():
                     "final_submit_at": final_submit_at,
                 },
                 "dwell_time_s": session["elapsed_time"],
+                # Milliseconds between requesting the initial recommendation
+                # and showing it (a random 1.5-3.5 s wait on the page, so a
+                # scripted text does not appear faster than a model reply).
+                # None when not measured, e.g. after a reload.
+                "recommendation_delay_ms": _form_count("recommendation_delay_ms") or None,
                 "idk_phrasing_id": (
                     _initial_recommendation_entry(current_q_index) or {}
                 ).get("idk_phrasing_id"),
@@ -586,6 +651,16 @@ def quiz():
                     "n_copy": _form_count("n_copy"),
                     "n_paste": _form_count("n_paste"),
                     "pasted_chars": _form_count("pasted_chars"),
+                },
+                # Leaving the study page during the trial (client-side, reset
+                # on a reload): n_hidden = times the tab was hidden (another
+                # tab or app in front), hidden_s = total seconds hidden,
+                # n_blur = times the page lost focus, which also catches a
+                # second window beside the browser but is noisier.
+                "visibility": {
+                    "n_hidden": _form_count("n_hidden"),
+                    "hidden_s": round(_form_count("hidden_ms") / 1000, 1),
+                    "n_blur": _form_count("n_blur"),
                 },
 
                 "covariates": covariates,
@@ -611,6 +686,7 @@ def quiz():
     return render_template(
         "question.html",
         question=question,
+        options=_displayed_options(current_q_index),
         question_number=session["question_index"] + 1,
         total_questions=len(session["question_order"]),
         chat_history=current_trial_history,
@@ -681,6 +757,11 @@ def chat():
 
     if _initial_recommendation_entry(session["question_order"][session["question_index"]]) is None:
         return jsonify({"error": "Request the initial recommendation first."}), 409
+    # When the message reached the server. `timestamp` on the logged turn is
+    # when the reply came back, which can be after the answer was submitted
+    # (`after_answer`); every logged message was sent before it, because the
+    # check above refuses messages once the answer is in.
+    sent_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     current_q_index = None
     position = session["question_index"]
     try:
@@ -696,7 +777,8 @@ def chat():
         # is what makes the IDK abstention rules un-negotiable from the
         # participant's side — see app.utils.chat_prompting.
         system_message = build_system_message(
-            questions[current_q_index], chat_prompt, variant
+            questions[current_q_index], chat_prompt, variant,
+            options=_displayed_options(current_q_index),
         )
 
         # Prior turns for THIS trial only (filtered by question_index), so a
@@ -774,6 +856,7 @@ def chat():
                 **request_metadata,
                 "shown_to_participant": False,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "sent_at": sent_at,
                 "user_message": user_message,
                 "assistant_message": neutral_message,
                 # The raw (possibly partial) model output, preserved for
@@ -790,6 +873,9 @@ def chat():
 
         raw_reply = bot_response
         bot_response, policy_filter_reason = filter_idk_reply(questions[current_q_index], variant, bot_response)
+        options = questions[current_q_index]["options"]
+        printed_forms = questions[current_q_index].get("printed_forms")
+        coded_option = stated_option(bot_response, options, printed_forms)
         trial_store.log_turn(session["participant_id"], position, {
             "question_index": current_q_index,
             "entry_type": "followup",
@@ -801,11 +887,12 @@ def chat():
                 **request_metadata,
             "shown_to_participant": True,
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "sent_at": sent_at,
             "user_message": user_message,
             "assistant_message": bot_response,
-            "mentioned_options": option_mentions(bot_response, questions[current_q_index]["options"]),
-            "stated_option": stated_option(bot_response, questions[current_q_index]["options"]),
-            "option_coding_status": ("explicit_output_match" if stated_option(bot_response, questions[current_q_index]["options"]) is not None else "requires_review"),
+            "mentioned_options": option_mentions(bot_response, options, printed_forms),
+            "stated_option": coded_option,
+            "option_coding_status": "explicit_output_match" if coded_option is not None else "requires_review",
             "prompt_tokens": getattr(usage, "prompt_tokens", None),
             "completion_tokens": getattr(usage, "completion_tokens", None),
             "total_tokens": getattr(usage, "total_tokens", None),
@@ -828,6 +915,7 @@ def chat():
                 **locals().get("request_metadata", runtime_metadata()),
                 "shown_to_participant": False,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "sent_at": sent_at,
                 "user_message": user_message,
                 "assistant_message": None,
             })
@@ -929,7 +1017,15 @@ def _render_post_survey(error=None):
     )
 
 
-FINAL_SURVEY_FIELDS = tuple(FINAL_ITEMS) + tuple(FINAL_TEXT_ITEMS)
+FINAL_SURVEY_FIELDS = tuple(FINAL_LIKERT_ITEMS) + tuple(FINAL_ALL_TEXT_ITEMS)
+
+
+def _render_final_survey(error=None):
+    return render_template(
+        "final_survey.html", error=error,
+        final_items=FINAL_ITEMS, final_text_items=FINAL_TEXT_ITEMS,
+        change_items=FINAL_CHANGE_ITEMS, change_text_items=FINAL_CHANGE_TEXT_ITEMS,
+    )
 
 @main_bp.route("/final_survey", methods=["GET", "POST"])
 def final_survey():
@@ -943,12 +1039,11 @@ def final_survey():
     if request.method == "POST":
         survey_data = {name: request.form.get(name) for name in FINAL_SURVEY_FIELDS}
         valid = all(value in LIKERT or (name == "trust_chatgpt" and value == "not_used")
-                    for name, value in survey_data.items() if name in FINAL_ITEMS)
+                    for name, value in survey_data.items() if name in FINAL_LIKERT_ITEMS)
         valid = valid and all(isinstance(survey_data[name], str) and 0 < len(survey_data[name].strip()) <= 2000
-                              for name in FINAL_TEXT_ITEMS)
+                              for name in FINAL_ALL_TEXT_ITEMS)
         if not valid:
-            return render_template("final_survey.html", error="Please answer every statement.",
-                                   final_items=FINAL_ITEMS, final_text_items=FINAL_TEXT_ITEMS), 400
+            return _render_final_survey(error="Please answer every statement."), 400
         trial_store.save_survey_part(session["participant_id"], "final_survey", survey_data)
 
         # Create an empty dictionary to hold all the data
@@ -985,6 +1080,8 @@ def final_survey():
             ("type_at_position", "type_at_position"),
             ("rotation_seed", "seed"),
             ("rotation_scheme", "rotation_scheme"),
+            ("option_order_scheme", "option_order_scheme"),
+            ("option_orders", "option_orders"),
         ):
             if assignment.get(source) is not None:
                 combined_data[key] = assignment[source]
@@ -998,7 +1095,7 @@ def final_survey():
 
         return redirect(url_for("main.debrief"))
 
-    return render_template("final_survey.html", final_items=FINAL_ITEMS, final_text_items=FINAL_TEXT_ITEMS)
+    return _render_final_survey()
 
 
 @main_bp.route("/thank_you")
@@ -1020,9 +1117,14 @@ def debrief():
         debrief_store.choose(pid, choice)
         return redirect(url_for("main.thank_you"))
     assignment = get_assignment(pid) or {}
+    # The answer list stays hidden while data are being collected, so that it
+    # cannot spread to students who have not taken part yet. Set
+    # DEBRIEF_SHOW_ANSWERS=true once recruitment has closed.
+    show_answers = os.getenv("DEBRIEF_SHOW_ANSWERS", "false").lower() == "true"
     return render_template("debrief.html", withdrawal_code=debrief_store.withdrawal_code(pid),
                            withdrawal_deadline=debrief_store.deadline(), decision=participant.get("data_use"),
                            research_note=get_site(participant["site"])["research_note"],
+                           show_answers=show_answers,
                            questions=[questions[q] for q in assignment.get("question_order", [])])
 
 

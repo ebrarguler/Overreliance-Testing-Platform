@@ -49,7 +49,7 @@ Demographic fields, perceived difficulty, option order, model/provenance/coding 
 
 ## Validation
 
-- **422 automated tests pass**, including new durable-storage, stale-page, recovery, CSRF, withdrawal, survey-locking and export regressions.
+- **422 automated tests passed** on 2026-10-26, including new durable-storage, stale-page, recovery, CSRF, withdrawal, survey-locking and export regressions. The switch to uniform randomization (commit f012c1c) removed the difficulty-balancing tests (about 84 parametrised cases), leaving 346; the 2026-11-04 review fixes below bring it to 371.
 - Real local MongoDB and Flask-Session check: concurrent answer/chat requests, no stale session write, recovery after session loss, and 20 concurrent answer attempts yielding one record. This used a temporary local database, not the research database.
 - Rendered question-page JavaScript checked with Node.
 - Live synthetic evaluation: all 14 problems × all three conditions × two messages, 84 successful non-truncated responses, using `gpt-5.6-luna`. Raw outputs are in ignored `eval_results/chat_eval.json`.
@@ -61,11 +61,32 @@ Demographic fields, perceived difficulty, option order, model/provenance/coding 
 
 1. **Before collecting main-study data:** review the stimuli, run the planned student pretest, finalise consent/debrief/surveys and retention policy, set the withdrawal deadline, and obtain the applicable study approvals. Main-mode startup currently blocks collection with pending stimuli.
 2. **Continue IDK evaluation:** the seven-scenario battery has now run on every problem. Repeat it after model/prompt changes and include held-out paraphrases, mixed requests and longer participant-like conversations. General explanations can help infer answers even without an explicit output. Surface checks do not solve this semantic boundary.
-3. **Analysis:** preregister the same-problem W-versus-IDK wrong-option comparison, treatment of filtered/late replies, attrition and non-use responses. Do not pool the new `durable_natural_v1` protocol with earlier stance-defending chat simply because both use P/Q. H4 remains a small-sample estimate unless the recruitment/power plan changes.
+3. **Analysis:** preregister the same-problem W-versus-IDK wrong-option comparison, treatment of filtered/late replies, attrition and non-use responses. Do not pool the new `durable_natural_v1` protocol with earlier stance-defending chat simply because both use P/Q. H2 (the position-4 probe, formerly "H4") remains a small-sample estimate unless the recruitment/power plan changes.
 4. **Hosting:** configure HTTPS/proxy handling, operational backups and tested restoration, monitoring, and infrastructure-level request/cost limits. The threaded worker configuration is a starting point, not a measured capacity guarantee.
 5. **Identity:** participant cookies are bearer credentials. Keep research UUID exports private. Cross-device recovery is deliberately unavailable without an authenticated recovery mechanism; email entry is not sufficient. A signed dedicated recovery token would better separate authentication from research identifiers.
 6. **Maintainability:** split the large routes module into entry, trial, survey and debrief blueprints after behavior settles; remove unused legacy templates/schema definitions; add browser-driven accessibility/mobile tests and CI. Survey items are now centralised and share one rendering template.
 7. **Publication/privacy:** decide repository visibility or removal of public study branches yourself; no visibility changes or history rewrites were performed. Git-ignore rules only prevent new local artifacts from being added accidentally.
+
+## Pre-data-collection review fixes — 2026-11-04
+
+A review (journal-reviewer, methods, code and stimulus roles) found no bug in the recorded trial types, probe labels, IDK encounter numbers, randomization or answer key. These fixes followed:
+
+- **Option order is shuffled per participant** (`seeded_shuffle_v1`, from the assignment seed, stored with the assignment). In the bank the W target was option A for 8 of 14 problems. The chat prompt lists options in the displayed order. Existing assignments keep the bank order.
+- **Double-submitted consent** created two participants and two P/Q slots (UZH) or locked a UF participant out with a 409. A per-session consent nonce now makes the second submission reuse the first participant; the button is disabled on submit.
+- **IDK filter and option coding** recognise problem 0's printed output `4 3` as well as the option text `4, 3` (`printed_forms`).
+- **Logging:** `sent_at` on every chat turn; `n_messages_sent` per trial; per-trial tab-hidden count, hidden seconds and focus-loss count (UZH consent text updated to mention this; the UF consent still needs its own amendment).
+- **Exports:** protocol labels and option places on every `trials.csv` row; aggregates flag a design group that pools several protocols; `attrition.csv` reports the assigned order.
+- **Debrief:** the correct-answer list is hidden unless `DEBRIEF_SHOW_ANSWERS=true`, and participants are asked not to share study details.
+
+Still open from the review (need a decision, human work or a live evaluation): pretest and rewrite weak W items (problems 0, 3, 5, 6); decide whether to tighten the IDK concept-explanation rule (general concept replies stated the deciding rule on most problems) and re-run the adversarial evaluation; the IDK filter still replaces harmless replies containing a bare option digit; export trials of non-completers for intention-to-treat; a codebook for answer-seeking messages; a no-other-tools instruction; a short delay before the scripted recommendation; preregistration.
+
+## Entry, instructions and surveys — 2026-11-05
+
+- `/` is now the UZH entry page; `/start/uzh` redirects there. UF code and its `/start/uf` link are kept but not in active use.
+- The instructions page and a line on the trial page ask participants not to run the code or use search engines, other AI tools, notes or other people.
+- The scripted recommendation is shown after a random 1.5–3.5 s wait with a "Thinking…" indicator; chat replies show the same indicator. The wait is logged per trial (`recommendation_delay_ms`).
+- The final survey has a second part, shown only after the first part (including the study-purpose and unusual-behaviour questions) is complete: four 1–7 items on change during the study (more skeptical, more trust, "I don't know" changed use, "I don't know" made other answers more believable), the open question on how use changed, and the other-tools question.
+- UZH demographic records no longer carry an empty `ethnicity` field; age must be at least 18 (matching the consent).
 
 ## Useful commands
 

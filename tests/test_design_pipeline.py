@@ -75,7 +75,7 @@ def _completion(content):
 
 
 def _consent(client):
-    client.get("/start/uzh")
+    client.get("/")
     client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
 
 
@@ -282,12 +282,12 @@ def test_assignment_and_mapping_survive_refresh_and_resume(client, db):
             "sequence_label", "sequence_design_version")
 
     # Same browser, live session.
-    client.get("/start/uzh")
+    client.get("/")
     assert {k: _session(client)[k] for k in keys} == {k: first[k] for k in keys}
 
     # Session lost, participant cookie kept.
     client.delete_cookie("session")
-    client.get("/start/uzh")
+    client.get("/")
     assert {k: _session(client)[k] for k in keys} == {k: first[k] for k in keys}
 
     assert len(db["participant_assignments"].docs) == 1
@@ -318,7 +318,7 @@ def test_legacy_participant_resumes_with_their_saved_design(client, db):
     legacy_record = copy.deepcopy(record)
 
     client.delete_cookie("session")
-    client.get("/start/uzh")
+    client.get("/")
     state = _session(client)
     assert state["sequence_label"] == "S2"
     assert state["sequence_design_version"] is None
@@ -362,7 +362,7 @@ def test_option6_participant_resumes_with_their_saved_design(client, db):
     option6_record = copy.deepcopy(record)
 
     client.delete_cookie("session")
-    client.get("/start/uzh")
+    client.get("/")
     state = _session(client)
     assert (state["sequence_label"], state["sequence_design_version"]) == ("A", "option6_v1")
 

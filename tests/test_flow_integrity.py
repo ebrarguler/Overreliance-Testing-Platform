@@ -45,7 +45,7 @@ def client(db):
     app.config["CSRF_ENABLED"] = False
     app.register_blueprint(main_bp)
     c = app.test_client()
-    c.get("/start/uzh")
+    c.get("/")
     c.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
     # Demographics and pre-survey done, so the resume logic points at the quiz.
     with c.session_transaction() as sess:

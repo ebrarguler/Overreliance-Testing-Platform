@@ -10,7 +10,7 @@ Use the existing virtual environment, or follow `setup.md` to create one. Copy `
 .venv/bin/python run.py
 ```
 
-Enter through `/start/uzh` or `/start/uf`. `/` is not a site-neutral enrolment page. The Procfile configures two Gunicorn thread workers for deployment. Local tests do not call OpenAI or the research database:
+The bare address `/` is the UZH entry page (`/start/uzh` redirects there). UF keeps its own link, `/start/uf`, but is not in active use. The Procfile configures two Gunicorn thread workers for deployment. Local tests do not call OpenAI or the research database:
 
 ```sh
 .venv/bin/python -m pytest -q
@@ -20,10 +20,12 @@ Enter through `/start/uzh` or `/start/uf`. `/` is not a site-neutral enrolment p
 
 - P/Q orders in blocks of 5/5/4, balanced separately at each site.
 - Seeded uniform question randomization: all 14 questions appear once, randomly assigned to the fixed P/Q positions (8 correct, 3 wrong, 3 IDK), without difficulty labels. Existing participant assignments are preserved.
+- Answer options are shown in a per-participant random order (from the same seed); option places are recorded.
 - Initial recommendations are scripted. Correct/wrong follow-up prompts use a natural assistant with the code and options; IDK prompts maintain abstention and apply conservative output checks.
 - Answers, ratings, chat turns, timers, and surveys are saved incrementally in MongoDB. Session loss restores progress from those records.
 - CSRF tokens, trial-position checks, first-write-wins answers/ratings, and server-side completion checks protect the flow.
-- Final survey precedes disclosure. Research exports exclude pending or withdrawn data-use decisions. `/withdraw` accepts a withdrawal code without requiring the original browser.
+- The instructions and trial page ask participants not to run the code or use other tools. The scripted recommendation appears after a random 1.5–3.5 s "Thinking…" wait, like a model reply.
+- Final survey precedes disclosure. Its part 2 (change in assistant use, including the "I don't know" answers) is shown only after part 1 and the study-purpose questions are complete. The debrief hides the correct answers unless `DEBRIEF_SHOW_ANSWERS=true` (set after recruitment closes). Research exports exclude pending or withdrawn data-use decisions. `/withdraw` accepts a withdrawal code without requiring the original browser.
 
 `STUDY_PHASE` defaults to `pilot`. Main-study startup checks reject unreviewed active stimuli and missing approval/configuration. These checks do not substitute for ethics approval or a stimulus pretest.
 

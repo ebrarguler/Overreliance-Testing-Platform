@@ -41,7 +41,7 @@ def client():
 
 
 def _enter(client, site):
-    client.get(f"/start/{site}")
+    client.get("/" if site == "uzh" else f"/start/{site}")
     if site == "uf":
         client.post("/validate_email", data=UF_FORM)
     client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})

@@ -1,7 +1,11 @@
 """
-Participating sites. Each site has its own entry link (/start/<key>), its
-own start page, study information and consent page; the experiment itself
-is identical for every site.
+Participating sites. Each site has its own start page, study information and
+consent page; the experiment itself is identical for every site.
+
+Entry links: the bare address `/` is the entry for DEFAULT_SITE (UZH, the
+study currently collecting data). Other sites keep their own link,
+/start/<key> (UF: /start/uf, not in active use for now). /start/uzh
+redirects to `/`.
 
 Sites with `collects_identity` (UF) ask for email, student ID, name and
 class on the start page, accept only emails from `email_domain`, and use the
@@ -13,6 +17,9 @@ The site key is stored with the participant's research record, so responses
 can be split by site at analysis time. Adding a site means adding an entry
 here — no route changes are needed.
 """
+
+# The site whose entry page is the bare address `/`.
+DEFAULT_SITE = "uzh"
 
 SITES = {
     "uzh": {

@@ -3,14 +3,51 @@
   <h2>Final survey: about this assistant</h2>
   <p>Unless a statement explicitly mentions ChatGPT, answer about the assistant you just used in this study.</p>
   {% if error %}<p role="alert">{{ error }}</p>{% endif %}
-  <form method="POST" class="survey-form">
+  <form method="POST" class="survey-form" id="final-survey-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    {% for name, label in final_items.items() %}{% include "_likert_item.html" %}{% endfor %}
-    {% for name, label in final_text_items.items() %}
-    <p><label for="{{ name }}">{{ label }}</label></p>
-    <textarea id="{{ name }}" name="{{ name }}" maxlength="2000" required></textarea>
-    {% endfor %}
-    <button type="submit" class="survey-btn">Continue</button>
+    {# Part 2 names the "I don't know" answers. It stays hidden until part 1,
+       which includes the study-purpose question, is complete, so it cannot
+       shape those answers. Both parts are sent in one submission. #}
+    <section id="final-part-1">
+      <p class="survey-part">Part 1 of 2</p>
+      {% for name, label in final_items.items() %}{% include "_likert_item.html" %}{% endfor %}
+      {% for name, label in final_text_items.items() %}
+      <p><label for="{{ name }}">{{ label }}</label></p>
+      <textarea id="{{ name }}" name="{{ name }}" maxlength="2000" required></textarea>
+      {% endfor %}
+      <button type="button" id="final-next" class="survey-btn">Next</button>
+    </section>
+    <section id="final-part-2" hidden>
+      <p class="survey-part">Part 2 of 2</p>
+      <h3>How you used the assistant during the study</h3>
+      {% for name, label in change_items.items() %}{% include "_likert_item.html" %}{% endfor %}
+      {% for name, label in change_text_items.items() %}
+      <p><label for="{{ name }}">{{ label }}</label></p>
+      <textarea id="{{ name }}" name="{{ name }}" maxlength="2000" required></textarea>
+      {% endfor %}
+      <button type="submit" class="survey-btn">Continue</button>
+    </section>
   </form>
 </div>
+<script>
+  (function () {
+    const part1 = document.getElementById("final-part-1");
+    const part2 = document.getElementById("final-part-2");
+    document.getElementById("final-next").addEventListener("click", () => {
+      // Every part-1 answer is required; point at the first missing one.
+      for (const field of part1.querySelectorAll("input[required], textarea[required]")) {
+        if (!field.checkValidity()) {
+          field.reportValidity();
+          return;
+        }
+      }
+      // Part 1 stays in the form (it is submitted with part 2) but can no
+      // longer be seen or changed.
+      part1.hidden = true;
+      part1.inert = true;
+      part2.hidden = false;
+      window.scrollTo(0, 0);
+    });
+  })();
+</script>
 {% endblock %}

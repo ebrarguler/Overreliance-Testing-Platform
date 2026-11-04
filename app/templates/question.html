@@ -21,7 +21,7 @@
     <form id="question-form" method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="position" value="{{ question_number - 1 }}" />
-      {% for option in question['options'] %}
+      {% for option in options %}
       <div class="option">
         <input
           type="radio"
@@ -61,6 +61,10 @@
       <input type="hidden" name="n_copy" id="n_copy" value="0" />
       <input type="hidden" name="n_paste" id="n_paste" value="0" />
       <input type="hidden" name="pasted_chars" id="pasted_chars" value="0" />
+      <input type="hidden" name="n_hidden" id="n_hidden" value="0" />
+      <input type="hidden" name="hidden_ms" id="hidden_ms" value="0" />
+      <input type="hidden" name="n_blur" id="n_blur" value="0" />
+      <input type="hidden" name="recommendation_delay_ms" id="recommendation_delay_ms" value="" />
     </form>
   </div>
 
@@ -101,6 +105,7 @@
         </button>
       </div>
       <p class="chat-hint">Enter sends the message. Shift+Enter starts a new line.</p>
+      <p class="chat-hint">Please use only this page and its assistant: do not run the code or use other tools.</p>
     </div>
   </div>
 
@@ -201,6 +206,37 @@
     pastedChars += text.length;
     document.getElementById("n_paste").value = String(pasteCount);
     document.getElementById("pasted_chars").value = String(pastedChars);
+  });
+
+  // --- Leaving the page ---------------------------------------------------------
+  // How often, and for how long, this tab was hidden during the trial, and how
+  // often the page lost focus (a second window beside the browser hides
+  // nothing but takes focus). Says nothing about why. Reset on a reload.
+  let hiddenCount = 0;
+  let hiddenMs = 0;
+  let hiddenSince = null;
+  let blurCount = 0;
+
+  function recordVisibility() {
+    document.getElementById("n_hidden").value = String(hiddenCount);
+    document.getElementById("hidden_ms").value = String(Math.round(hiddenMs));
+    document.getElementById("n_blur").value = String(blurCount);
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      hiddenCount += 1;
+      hiddenSince = Date.now();
+    } else if (hiddenSince !== null) {
+      hiddenMs += Date.now() - hiddenSince;
+      hiddenSince = null;
+    }
+    recordVisibility();
+  });
+
+  window.addEventListener("blur", () => {
+    blurCount += 1;
+    recordVisibility();
   });
 
   function scrollToBottom() {
@@ -339,11 +375,39 @@
     return messageDiv;
   }
 
+  // "Assistant is thinking" placeholder, shown while waiting for the initial
+  // recommendation and for every chat reply, so both look the same.
+  function showThinking() {
+    const chatMessages = document.getElementById("chat-messages");
+    const indicator = document.createElement("div");
+    indicator.className = "chat-message bot-message thinking";
+    const label = document.createElement("strong");
+    label.textContent = "Assistant:";
+    indicator.append(label, document.createTextNode(" Thinking…"));
+    chatMessages.appendChild(indicator);
+    scrollToBottom();
+    return indicator;
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // The initial recommendation is prepared in advance and needs no model call,
+  // so it would appear instantly while chat replies take a few seconds. That
+  // difference could reveal that it is scripted. Show it after a random
+  // 1.5-3.5 s wait (counted from the request), in every condition alike.
+  const RECOMMENDATION_DELAY_MIN_MS = 1500;
+  const RECOMMENDATION_DELAY_MAX_MS = 3500;
+  let recommendationPending = false;
+
   document
     .getElementById("get-recommendation")
     .addEventListener("click", async () => {
-      if (recommendationReceived) return;
+      const button = document.getElementById("get-recommendation");
+      if (recommendationReceived || recommendationPending) return;
+      recommendationPending = true;
+      button.disabled = true;
       markFirstInteraction();
+      let indicator = null;
 
       try {
         await addMessageWithTyping(
@@ -351,17 +415,29 @@
           true
         );
 
+        const delay = RECOMMENDATION_DELAY_MIN_MS
+          + Math.random() * (RECOMMENDATION_DELAY_MAX_MS - RECOMMENDATION_DELAY_MIN_MS);
+        const requestedAt = Date.now();
+        indicator = showThinking();
         const response = await fetch(`/get_initial_recommendation?position=${position}`, {headers: {"X-CSRF-Token": {{ csrf_token() | tojson }}}});
         if (response.status === 409) { window.location.reload(); return; }
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Recommendation unavailable");
+        await sleep(Math.max(0, delay - (Date.now() - requestedAt)));
+        indicator.remove();
+        indicator = null;
+        document.getElementById("recommendation_delay_ms").value = String(Math.round(Date.now() - requestedAt));
         await addMessageWithTyping(data.recommendation, false);
 
         unlockAfterRecommendation();
         document.getElementById("user-message").focus();
       } catch (error) {
         console.error("Error:", error);
-        document.getElementById("get-recommendation").textContent = "Try initial recommendation again";
+        if (indicator) indicator.remove();
+        button.disabled = false;
+        button.textContent = "Try initial recommendation again";
+      } finally {
+        recommendationPending = false;
       }
     });
 
@@ -391,6 +467,7 @@
   // an argument rather than re-reading the input, so a retry can never pick up
   // (or clobber) a draft typed since the failure.
   async function requestReply(message) {
+    const indicator = showThinking();
     try {
       const response = await fetch("/chat", {
         method: "POST",
@@ -404,9 +481,11 @@
         throw new Error(data.error || `Request failed (${response.status})`);
       }
 
+      indicator.remove();
       await addMessageWithTyping(data.response, false);
     } catch (error) {
       console.error("Error:", error);
+      indicator.remove();
       showRetry(message);
     } finally {
       endSending();
