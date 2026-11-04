@@ -33,6 +33,12 @@ def _matches_value(value, cond):
             if op == "$in":
                 if value is MISSING or value not in arg:
                     return False
+            elif op == "$exists":
+                if (value is not MISSING) != arg:
+                    return False
+            elif op == "$ne":
+                if value is not MISSING and value == arg:
+                    return False
             elif op == "$type":
                 if value is MISSING or not _TYPE_CHECKS[arg](value):
                     return False
@@ -123,7 +129,11 @@ class FakeCollection:
     @staticmethod
     def _apply(doc, update):
         for k, v in update.get("$set", {}).items():
-            doc[k] = copy.deepcopy(v)
+            target = doc
+            parts = k.split(".")
+            for part in parts[:-1]:
+                target = target.setdefault(part, {})
+            target[parts[-1]] = copy.deepcopy(v)
         for k, v in update.get("$inc", {}).items():
             doc[k] = doc.get(k, 0) + v
 

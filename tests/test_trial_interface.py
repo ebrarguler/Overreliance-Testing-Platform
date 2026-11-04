@@ -1,3 +1,5 @@
+from tests.helpers import prepare_session, research, trial_get, trial_post, complete_trials
+from app.utils import trial_store
 """
 Trial-page interface (app/templates/question.html, post_survey.html): the
 progress indicator, the multi-line chat box, copying allowed and counted,
@@ -14,7 +16,7 @@ from app.routes import main_bp
 from app.utils.questions import questions
 from scripts.export_data import TRIAL_FIELDS, build_trial_rows
 
-RATING = {"confidence": "4", "trust": "4", "helpfulness": "4"}
+RATING = {"confidence": "4", "trust": "4", "helpfulness": "4", "difficulty": "4"}
 
 
 def _client(question_order):
@@ -23,9 +25,12 @@ def _client(question_order):
         template_folder=str(Path(__file__).resolve().parent.parent / "app" / "templates"),
     )
     app.secret_key = "test-secret"
+    app.config["CSRF_ENABLED"] = False
     app.register_blueprint(main_bp)
     c = app.test_client()
     with c.session_transaction() as sess:
+        sess["participant_id"] = "test-participant"
+        prepare_session(sess)
         sess["question_order"] = question_order
         sess["question_index"] = 0
         sess["variant_assignments"] = {str(q): "correct" for q in question_order}
@@ -44,12 +49,12 @@ def client():
 
 def _answer(client, **extra):
     client.get("/quiz")
-    client.get("/get_initial_recommendation")
+    trial_get(client, "/get_initial_recommendation")
     with client.session_transaction() as sess:
         q_index = sess["question_order"][sess["question_index"]]
-    client.post("/quiz", data={"answer": questions[q_index]["options"][0], **extra})
+    trial_post(client, "/quiz", data={"answer": questions[q_index]["options"][0], **extra})
     with client.session_transaction() as sess:
-        return sess["answers"][q_index]
+        return research(sess)["answers"][q_index]
 
 
 def test_question_page_shows_progress_out_of_the_total(client):
@@ -77,7 +82,7 @@ def test_submit_and_send_buttons_are_distinct(client):
 
 def test_restored_chat_labels_the_participant_as_you(client):
     client.get("/quiz")
-    client.get("/get_initial_recommendation")
+    trial_get(client, "/get_initial_recommendation")
     html = client.get("/quiz").get_data(as_text=True)
     assert "<strong>You:</strong>" in html
     assert "<strong>User:</strong>" not in html
@@ -112,7 +117,7 @@ def test_last_post_survey_leads_to_the_final_survey():
 def test_export_has_clipboard_columns(client):
     record = _answer(client, n_copy="1", n_paste="2", pasted_chars="80")
     with client.session_transaction() as sess:
-        doc = {"question_order": sess["question_order"], "answers": sess["answers"]}
+        doc = {"question_order": sess["question_order"], "answers": research(sess)["answers"]}
 
     (row,) = build_trial_rows(doc, participant_id=1)
     assert {"n_copy", "n_paste", "pasted_chars"} <= set(TRIAL_FIELDS)

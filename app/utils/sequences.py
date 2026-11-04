@@ -41,9 +41,9 @@ reassigning. Participants assigned under an earlier design (Option 6 or the
 six-order S1-S6 table, both kept below) keep that assignment.
 """
 
-import itertools
 import random
 from collections import Counter
+from functools import lru_cache
 
 from .trial_types import TrialType, is_in_rotation, is_placeholder
 
@@ -119,16 +119,10 @@ LEGACY_SEQUENCES = {
 # every participant to see the same question in the same condition.
 ROTATE_PROBLEMS = True
 
-# Which problem is shown as which trial type is drawn per participant, from
-# every problem (all three variants are written for each). To keep problem
-# difficulty from differing between trial types, each of BALANCED_TYPES gets
-# exactly one problem from every DIFFICULTY_LEVELS stratum (the `difficulty`
-# label in questions.py); C gets the rest. With 4 easy, 6 medium and 4 hard
-# problems that is W: 1/1/1, IDK: 1/1/1, C: 2/4/2 for every participant.
-# Stored with each new assignment as `rotation_scheme`.
-ROTATION_SCHEME = "difficulty_balanced_v1"
-DIFFICULTY_LEVELS = ("easy", "medium", "hard")
-BALANCED_TYPES = (I, W)
+# Uniform question randomization without author-assigned difficulty labels.
+# The P/Q response-type positions and counts remain fixed. Stored with each
+# assignment so earlier difficulty-balanced draws can be identified.
+ROTATION_SCHEME = "uniform_random_v1"
 
 # ---------------------------------------------------------------------------
 # Probe classification — shared by validation and per-trial measures.
@@ -292,91 +286,76 @@ def build_eligibility_pools(questions):
 
 def _assign_problems(seq_label, sequence, questions, rng):
     """
-    Decide which problems fill each trial type for one participant.
+    Draw uniformly from feasible question-to-type assignments, without
+    difficulty strata. Each question is used at most once. With all variants
+    available (the current bank), this is a simple uniform shuffle.
 
-    For each difficulty level, one problem per BALANCED_TYPES type is drawn
-    together (an injective choice among the eligible, unclaimed problems at
-    that level), so drawing one type can never take the only problem another
-    type could use. C then takes the remaining C-eligible problems. With
-    rng=None every choice is the lowest index (deterministic).
-
-    Returns {TrialType: [question indices]}; raises ValueError if the bank
-    cannot fill the sequence this way.
+    Restricted banks use completion counts to weight each choice, preventing
+    both greedy dead ends and bias toward assignments found first. rng=None
+    chooses the first feasible assignment for validation/deterministic pilots.
     """
     needed = Counter(sequence)
     pools = build_eligibility_pools(questions)
-    claimed = set()
     assigned_to = {t: [] for t in TrialType}
-
-    for raw_type in BALANCED_TYPES:
-        if needed[raw_type] != len(DIFFICULTY_LEVELS):
-            raise ValueError(
-                f"Sequence {seq_label} has {needed[raw_type]} {raw_type!r} trial(s); "
-                f"balancing by difficulty needs exactly {len(DIFFICULTY_LEVELS)}, "
-                f"one per level {DIFFICULTY_LEVELS}"
-            )
-
-    balanced = [TrialType(t) for t in BALANCED_TYPES]
-    for level in DIFFICULTY_LEVELS:
-        at_level = [
-            sorted(q for q in pools[t] if questions[q].get("difficulty") == level)
-            for t in balanced
-        ]
-        choices = [
-            combo for combo in itertools.product(*at_level)
-            if len(set(combo)) == len(combo)
-            # Every remaining problem must support C; otherwise a random
-            # draw could pass validation but fail for a different seed.
-            and all(i in combo or i in pools[TrialType.CORRECT]
-                    for i, q in enumerate(questions) if q.get("difficulty") == level)
-        ]
-        if not choices:
-            raise ValueError(
-                f"Sequence {seq_label}: no distinct {level!r} problems for "
-                + ", ".join(
-                    f"{t.value!r} (eligible: {ids})" for t, ids in zip(balanced, at_level)
-                )
-            )
-        combo = rng.choice(choices) if rng else choices[0]
-        for t, q_idx in zip(balanced, combo):
-            assigned_to[t].append(q_idx)
-            claimed.add(q_idx)
-
-    for raw_type, count in needed.items():
-        t = TrialType(raw_type)
-        if raw_type in BALANCED_TYPES:
-            continue
-        rest = sorted(q for q in pools[t] if q not in claimed)
-        if len(rest) < count:
-            raise ValueError(
-                f"Sequence {seq_label} needs {count} {t.value!r} trial(s) but only "
-                f"{len(rest)} problem(s) eligible for it are left after the "
-                f"balanced draw"
-            )
+    n = len(questions)
+    types = tuple(TrialType)
+    if n >= len(sequence) and all(len(pools[t]) == n for t in types if needed[t]):
+        order = list(range(n))
         if rng:
-            rng.shuffle(rest)
-        assigned_to[t] = rest[:count]
-        claimed.update(assigned_to[t])
+            rng.shuffle(order)
+        for q_idx, raw_type in zip(order, sequence):
+            assigned_to[TrialType(raw_type)].append(q_idx)
+        return assigned_to
+
+    eligible = [eligible_trial_types(q) for q in questions]
+
+    def choices(q_idx, remaining):
+        for j, t in enumerate(types):
+            if remaining[j] and t in eligible[q_idx]:
+                reduced = list(remaining)
+                reduced[j] -= 1
+                yield t, tuple(reduced)
+        if n - q_idx > sum(remaining):
+            yield None, remaining  # surplus questions may be left unused
+
+    @lru_cache(maxsize=None)
+    def completions(q_idx, remaining):
+        if not any(remaining):
+            return 1
+        if n - q_idx < sum(remaining):
+            return 0
+        return sum(completions(q_idx + 1, rest)
+                   for _, rest in choices(q_idx, remaining))
+
+    remaining = tuple(needed[t] for t in types)
+    if not completions(0, remaining):
+        raise ValueError(f"Sequence {seq_label}: no feasible assignment of distinct eligible questions")
+    for q_idx in range(n):
+        if not any(remaining):
+            break
+        draw = rng.randrange(completions(q_idx, remaining)) if rng else 0
+        for t, rest in choices(q_idx, remaining):
+            weight = completions(q_idx + 1, rest)
+            if draw < weight:
+                if t is not None:
+                    assigned_to[t].append(q_idx)
+                remaining = rest
+                break
+            draw -= weight
 
     return assigned_to
 
 
 def validate_pool_sufficiency(questions):
     """
-    Check that every configured sequence can be filled, balanced by
-    difficulty, given which trial types each problem has written content for
-    and which difficulty label it carries.
+    Check that every configured sequence can be filled with distinct
+    questions and available variants. No difficulty labels are required.
 
     Raises ValueError, listing every problem found, instead of a live
     participant being served a 'TODO' placeholder or hitting an error
     mid-session.
     """
-    shortfalls = [
-        f"question {q['id']}: difficulty {q.get('difficulty')!r} is not one of "
-        f"{DIFFICULTY_LEVELS}"
-        for q in questions
-        if q.get("difficulty") not in DIFFICULTY_LEVELS
-    ]
+    shortfalls = []
     for label, seq in zip(SEQUENCE_LABELS, SEQUENCES):
         try:
             _assign_problems(label, seq, questions, rng=None)
@@ -410,9 +389,9 @@ def build_trial_sequence(seq_index, questions, seed=None):
     Build one participant's realized trial sequence: which question fills
     each position, and which trial type it's shown under.
 
-    Problems are assigned to trial types balanced by difficulty
-    (ROTATION_SCHEME; see _assign_problems), then shuffled within each type
-    across that type's positions.
+    Problems are assigned uniformly to eligible trial types without
+    difficulty labels (ROTATION_SCHEME; see _assign_problems), then shuffled
+    within each type across that type's positions.
 
     Parameters
     ----------

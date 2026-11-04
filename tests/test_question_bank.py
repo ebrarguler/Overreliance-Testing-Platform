@@ -1,3 +1,5 @@
+from tests.helpers import prepare_session, research, trial_get, trial_post, complete_trials
+from app.utils import trial_store
 """
 The question bank after drafting every problem as correct, wrong and IDK
 (app/utils/questions.py): what is written, what is served, how the wrong
@@ -125,11 +127,13 @@ def _client(question_order, variants, phrasing_order):
         template_folder=str(Path(__file__).resolve().parent.parent / "app" / "templates"),
     )
     app.secret_key = "test-secret"
+    app.config["CSRF_ENABLED"] = False
     app.register_blueprint(main_bp)
     c = app.test_client()
     with c.session_transaction() as sess:
+        prepare_session(sess)
         sess.update(
-            question_order=question_order, question_index=0, begin=0,
+            participant_id="test-participant", question_order=question_order, question_index=0, begin=0,
             variant_assignments=variants, idk_phrasing_order=phrasing_order,
             answers=[], times=[], chat_history=[], chat_transcript=[],
         )
@@ -139,15 +143,15 @@ def _client(question_order, variants, phrasing_order):
 def test_route_shows_and_logs_the_participants_wording():
     c = _client([9, 0], {"9": I, "0": C}, [2, 0, 1])
     c.get("/quiz")
-    first = c.get("/get_initial_recommendation").get_json()["recommendation"]
+    first = trial_get(c, "/get_initial_recommendation").get_json()["recommendation"]
     assert first == IDK_ABSTENTIONS[2]
     # A reload returns the text that was shown, without logging it again.
-    assert c.get("/get_initial_recommendation").get_json()["recommendation"] == first
+    assert trial_get(c, "/get_initial_recommendation").get_json()["recommendation"] == first
 
-    c.post("/quiz", data={"answer": questions[9]["options"][0]})
+    trial_post(c, "/quiz", data={"answer": questions[9]["options"][0]})
     with c.session_transaction() as sess:
-        (entry,) = [e for e in sess["chat_transcript"] if e["is_initial_recommendation"]]
-        record = sess["answers"][9]
+        (entry,) = [e for e in research(sess)["chat_transcript"] if e["is_initial_recommendation"]]
+        record = research(sess)["answers"][9]
     assert entry["idk_phrasing_id"] == 2
     assert record["idk_phrasing_id"] == 2
 
@@ -155,7 +159,7 @@ def test_route_shows_and_logs_the_participants_wording():
 def test_non_idk_trials_log_no_wording():
     c = _client([0], {"0": C}, [2, 0, 1])
     c.get("/quiz")
-    c.get("/get_initial_recommendation")
-    c.post("/quiz", data={"answer": questions[0]["options"][0]})
+    trial_get(c, "/get_initial_recommendation")
+    trial_post(c, "/quiz", data={"answer": questions[0]["options"][0]})
     with c.session_transaction() as sess:
-        assert sess["answers"][0]["idk_phrasing_id"] is None
+        assert research(sess)["answers"][0]["idk_phrasing_id"] is None

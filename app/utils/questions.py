@@ -16,8 +16,8 @@ always appear as the misleading one.
     are called without an explicit `variant`.
 
 Every problem has all three variants written, and every problem is
-randomized across all three types per participant, balanced by its
-`difficulty` label (sequences.ROTATION_SCHEME). Wording not yet signed off
+randomized across all three types per participant without difficulty labels
+(sequences.ROTATION_SCHEME). Wording not yet signed off
 carries `review_status: pending_final_review`
 (trial_types.is_pending_review). A variant can also be held out of rotation
 with `in_rotation: False` (trial_types.is_in_rotation). Both markers are
@@ -152,42 +152,24 @@ def _idk_variant(question_context, in_rotation=True):
 # Wrong recommendations for problems 0-7: (text, the option it endorses).
 # Each states a common misconception confidently.
 _DRAFT_WRONG = {
-    0: ("This outputs \"3, 3\". Joining lists with + leaves out values that are "
-        "already in the first list, so x is [1, 2, 3] and the set y has the same "
-        "3 elements.", "3, 3"),
-    1: ("This outputs 1. replace() only changes the first 'l' it finds unless you "
-        "give it a count, so the new string has a single 'L'.", "1"),
-    2: ("This outputs [1, 4, 3, 8]. The comprehension doubles the even numbers "
-        "and keeps the odd numbers as they are.", "[1, 4, 3, 8]"),
-    3: ("This outputs 0. update() replaces the dictionary's contents with the new "
-        "dictionary, so 'b' is no longer a key and get() returns the default.", "0"),
-    4: ("This outputs \"1 1\". self.count += 1 increases the class attribute that "
-        "all instances share, so Counter.count and c.count are both 1.", "1 1"),
-    5: ("This outputs 3. Because b has a default value, the remaining positional "
-        "arguments are not collected into args, so the function returns "
-        "a + b = 1 + 2.", "3"),
-    6: ("This outputs \"3 420\". The format :03d pads the number to three digits "
-        "by adding zeros after it.", "3 420"),
-    7: ("This outputs [1, 6, 4, 5]. The slice nums[1:4] covers the values 2 and 3, "
-        "and assigning [6] replaces them with a single 6.", "[1, 6, 4, 5]"),
+    0: ('This outputs "3, 3". List concatenation removes duplicates, leaving three elements in both the list and set.', "3, 3"),
+    1: ("This outputs 1. Without a count argument, replace() changes only the first matching lowercase letter to uppercase.", "1"),
+    2: ("This outputs [1, 4, 3, 8]. The comprehension doubles even values while keeping odd values unchanged.", "[1, 4, 3, 8]"),
+    3: ("This outputs 0. update() replaces existing dictionary contents, removing 'b', so get() returns its default value.", "0"),
+    4: ('This outputs "1 1". Incrementing self.count updates the shared class attribute, changing both displayed counts together.', "1 1"),
+    5: ("This outputs 3. The default parameter prevents extra positional arguments entering args, leaving only a plus b.", "3"),
+    6: ('This outputs "3 420". The integer format pads the value to three digits by appending a zero.', "3 420"),
+    7: ("This outputs [1, 6, 4, 5]. The slice replaces only the values two and three with six.", "[1, 6, 4, 5]"),
 }
 
-# Correct recommendations for problems 8-13, in the style of 0-7.
+# Shortened drafts, still requiring human stimulus review and pretesting.
 _DRAFT_CORRECT = {
-    8: ("This outputs 4. b refers to the same list as a, and += extends that list "
-        "in place, so b also has 4 elements."),
-    9: ("This raises UnboundLocalError. Because x is assigned inside f, Python "
-        "treats x as a local variable throughout the function, so print(x) runs "
-        "before x has a value."),
-    10: ("This outputs [1, 2]. next(g) already took the first value from the "
-         "generator, so list(g) collects only the values that are left."),
-    11: ("This outputs 7. strip() returns a new string instead of changing text, "
-         "and the result is not saved, so text still has 7 characters."),
-    12: ("This outputs 3. d.keys() returns a view that follows later changes to "
-         "the dictionary, so after 'c' is added the view has 3 keys."),
-    13: ("This outputs 4. Slicing with [:] makes a shallow copy: the outer list is "
-         "new, but the inner list is shared, so the change made through copy also "
-         "shows in orig."),
+    8: "This outputs 4. Both names reference the same list, which += extends in place with another element.",
+    9: "This raises UnboundLocalError. Assignment makes x local throughout the function, but print accesses it before that assignment.",
+    10: "This outputs [1, 2]. next(g) consumes the first value; list(g) collects only the generator's remaining values.",
+    11: "This outputs 7. strip() returns a new string; ignoring that result leaves the original text unchanged.",
+    12: "This outputs 3. The keys view reflects subsequent dictionary changes, including the new key added after creation.",
+    13: "This outputs 4. A shallow copy shares the inner list, so modifying it also changes the original.",
 }
 
 # The IDK `question_context` for every problem: the topic only. Earlier
@@ -281,7 +263,6 @@ questions = [
         'question': 'What is the output of:\nx = [1, 2] + [2, 3]\ny = set(x)\nprint(len(x), len(y))',
         'options': ['4, 4', '4, 3', '3, 3', '3, 4'],
         'correct': '4, 3',
-        'difficulty': 'easy',
         'concept_tags': ['list_concatenation', 'sets'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -302,7 +283,6 @@ questions = [
         'question': 'What is the output of:\ntext = "hello"\ntext = text.replace(\'l\', \'L\')\nprint(text.count(\'L\'))',
         'options': ['0', '1', '2', '3'],
         'correct': '2',
-        'difficulty': 'easy',
         'concept_tags': ['string_methods', 'string_immutability'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -323,7 +303,6 @@ questions = [
         'question': 'What is the output of:\nnums = [1, 2, 3, 4]\nresult = [x if x % 2 == 0 else x * 2 for x in nums]\nprint(result)',
         'options': ['[2, 2, 6, 4]', '[1, 2, 3, 4]', '[2, 4, 6, 8]', '[1, 4, 3, 8]'],
         'correct': '[2, 2, 6, 4]',
-        'difficulty': 'medium',
         'concept_tags': ['list_comprehensions', 'conditional_expressions'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -344,7 +323,6 @@ questions = [
         'question': 'What is the output of:\nd = {\'a\': 1, \'b\': 2}\nd.update({\'a\': 3, \'c\': 4})\nprint(d.get(\'b\', 0))',
         'options': ['0', '1', '2', '3'],
         'correct': '2',
-        'difficulty': 'easy',
         'concept_tags': ['dict_operations'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -365,7 +343,6 @@ questions = [
         'question': 'What is the output of:\nclass Counter:\n    count = 0\n    def increment(self):\n        self.count += 1\n\nc = Counter()\nc.increment()\nprint(Counter.count, c.count)',
         'options': ['0 1', '1 1', '1 0', '0 0'],
         'correct': '0 1',
-        'difficulty': 'medium',
         'concept_tags': ['class_vs_instance_attributes'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -386,7 +363,6 @@ questions = [
         'question': 'What is the output of:\ndef func(a, b=1, *args):\n    return a + b + sum(args)\n\nprint(func(1, 2, 3, 4))',
         'options': ['3', '6', '10', '7'],
         'correct': '10',
-        'difficulty': 'medium',
         'concept_tags': ['function_arguments', 'variadic_args'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -407,7 +383,6 @@ questions = [
         'question': 'What is the output of:\nx = 42\ns = f"{x:03d}"\nprint(len(s), s)',
         'options': ['2 42', '3 042', '3 420', '4 0042'],
         'correct': '3 042',
-        'difficulty': 'easy',
         'concept_tags': ['fstring_formatting'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -428,7 +403,6 @@ questions = [
         'question': 'What is the output of:\nnums = [1, 2, 3, 4, 5]\nnums[1:4] = [6]\nprint(nums)',
         'options': ['[1, 6, 5]', '[1, 2, 6, 4, 5]', '[1, 6, 4, 5]', '[6, 2, 3, 4, 5]'],
         'correct': '[1, 6, 5]',
-        'difficulty': 'medium',
         'concept_tags': ['slice_assignment'],
         'default_trial_type': TrialType.CORRECT,
         'variants': {
@@ -455,7 +429,6 @@ questions = [
         'question': 'What is the output of:\na = [1, 2, 3]\nb = a\na += [4]\nprint(len(b))',
         'options': ['3', '4', '1', '2'],
         'correct': '4',
-        'difficulty': 'hard',
         'concept_tags': ['list_references', 'aliasing', 'augmented_assignment'],
         'default_trial_type': TrialType.CONFIDENT_WRONG,
         'variants': {
@@ -477,7 +450,6 @@ questions = [
         'question': 'What is the output of:\nx = 1\ndef f():\n    print(x)\n    x = 2\nf()',
         'options': ['1', '2', 'None', 'UnboundLocalError'],
         'correct': 'UnboundLocalError',
-        'difficulty': 'hard',
         'concept_tags': ['variable_scope', 'unbound_local_error'],
         'default_trial_type': TrialType.CONFIDENT_WRONG,
         'variants': {
@@ -499,7 +471,6 @@ questions = [
         'question': 'What is the output of:\ndef get_values():\n    for i in range(3):\n        yield i\n\ng = get_values()\nnext(g)\nprint(list(g))',
         'options': ['[0, 1, 2]', '[1, 2]', '[0, 1]', '[2]'],
         'correct': '[1, 2]',
-        'difficulty': 'hard',
         'concept_tags': ['generators', 'iterator_state'],
         'default_trial_type': TrialType.CONFIDENT_WRONG,
         'variants': {
@@ -521,7 +492,6 @@ questions = [
         'question': 'What is the output of:\ntext = " hello "\ntext.strip()\nprint(len(text))',
         'options': ['5', '6', '7', '8'],
         'correct': '7',
-        'difficulty': 'medium',
         'concept_tags': ['string_immutability', 'string_methods'],
         'default_trial_type': TrialType.CONFIDENT_WRONG,
         'variants': {
@@ -543,7 +513,6 @@ questions = [
         'question': 'What is the output of:\nd = {\'a\': 1, \'b\': 2}\nkeys = d.keys()\nd[\'c\'] = 3\nprint(len(keys))',
         'options': ['2', '3', '1', '0'],
         'correct': '3',
-        'difficulty': 'medium',
         'concept_tags': ['dict_views', 'live_views'],
         'default_trial_type': TrialType.CONFIDENT_WRONG,
         'variants': {
@@ -565,7 +534,6 @@ questions = [
         'question': 'What is the output of:\norig = [1, [2, 3]]\ncopy = orig[:]\ncopy[1][0] = 4\nprint(orig[1][0])',
         'options': ['2', '4', '1', '3'],
         'correct': '4',
-        'difficulty': 'hard',
         'concept_tags': ['shallow_copy', 'nested_structures'],
         'default_trial_type': TrialType.CONFIDENT_WRONG,
         'variants': {

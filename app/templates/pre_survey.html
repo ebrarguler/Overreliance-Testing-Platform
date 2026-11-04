@@ -5,6 +5,7 @@
     <p class="survey-progress">Page {{ page }} of {{ total_pages }} &mdash; {{ page_config.title }}</p>
 
     <form method="POST" action="{{ url_for('main.pre_survey', page=page) }}" class="survey-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <div class="likert-group">
                 {% for section in page_config.sections %}

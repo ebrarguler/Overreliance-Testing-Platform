@@ -5,6 +5,7 @@
 		action="{{ url_for('main.collect_consent') }}"
 		class="consent-form"
 	>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 		<div class="consent-section">
 			<h2>Research Participant Informed Consent Form</h2>
 			<p>
@@ -36,13 +37,13 @@
 					<li>Interacting with an AI chatbot</li>
 					<li>Providing feedback through surveys</li>
 				</ul>
-				<p>The total time commitment is approximately 30 minutes.</p>
+				<p>The total time commitment is approximately 45 minutes.</p>
 			</div>
 
 			<div class="info-block">
 				<h3>Confidentiality</h3>
 				<p>
-					All data collected will be stored securely and anonymized.
+					Responses are pseudonymised using a random participant code; they are not anonymous.
 					Your responses will be kept confidential and used only for
 					research purposes.
 				</p>
@@ -56,7 +57,15 @@
 				</p>
 			</div>
 
-			{% include "_prior_participation.html" %}
+			<div class="info-block">
+                <h3>What is recorded and shared</h3>
+                <p>We record your survey answers, selected answers, timing, changes to selections, chat messages and replies, and counts of copying and pasting. UZH does not ask for your name, email, or student ID. Please do not enter personal information in chat.</p>
+                <p>Your chat messages and the programming problem are sent to OpenAI to generate replies. We do not send your demographic answers or participant code in the model prompt.</p>
+                <p>Some study details will be explained after the final survey. You can then decide whether your responses may be used. You will receive a code to withdraw them from research analysis{% if withdrawal_deadline %} until {{ withdrawal_deadline }}{% endif %}.</p>
+                <p>{{ research_note }}</p>
+            </div>
+            <label><input type="checkbox" name="adult" value="yes" required>I am at least 18 years old.</label>
+            {% include "_prior_participation.html" %}
 
 			<div class="consent-checkbox">
 				<input type="checkbox" id="consent" name="consent" required />

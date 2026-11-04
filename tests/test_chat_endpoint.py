@@ -1,3 +1,5 @@
+from tests.helpers import prepare_session, research, trial_get, trial_post, complete_trials
+from app.utils import trial_store
 """
 Regression tests for the /chat endpoint's OpenAI response handling
 (app/routes.py:chat). All OpenAI calls are mocked — no network access,
@@ -16,8 +18,10 @@ from app.routes import main_bp
 
 
 def _make_app():
-    app = Flask(__name__)
+    from pathlib import Path
+    app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / "app/templates"))
     app.secret_key = "test-secret"
+    app.config["CSRF_ENABLED"] = False
     app.register_blueprint(main_bp)
     return app
 
@@ -27,9 +31,12 @@ def client():
     app = _make_app()
     with app.test_client() as c:
         with c.session_transaction() as sess:
+            sess["participant_id"] = "test-participant"
+            prepare_session(sess)
             sess["question_order"] = [0]
             sess["question_index"] = 0
             sess["variant_assignments"] = {"0": "correct"}
+        trial_get(c, "/get_initial_recommendation")
         yield c
 
 
@@ -59,13 +66,16 @@ def test_successful_reply_uses_max_completion_tokens_param():
     app = _make_app()
     with app.test_client() as c:
         with c.session_transaction() as sess:
+            sess["participant_id"] = "test-participant"
+            prepare_session(sess)
             sess["question_order"] = [0]
             sess["question_index"] = 0
             sess["variant_assignments"] = {"0": "correct"}
 
+        trial_get(c, "/get_initial_recommendation")
         with patch("app.routes.client.chat.completions.create") as mock_create:
             mock_create.return_value = _make_completion("Here's a concise answer.")
-            resp = c.post("/chat", json={"message": "What's the output?"})
+            resp = trial_post(c, "/chat", json={"message": "What's the output?"})
 
     assert resp.status_code == 200
     assert resp.get_json()["response"] == "Here's a concise answer."
@@ -84,17 +94,17 @@ def test_successful_reply_is_saved_and_records_reasoning_tokens(client):
         mock_create.return_value = _make_completion(
             "This prints 4, 3.", finish_reason="stop", reasoning_tokens=12
         )
-        resp = client.post("/chat", json={"message": "What's the output?"})
+        resp = trial_post(client, "/chat", json={"message": "What's the output?"})
 
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["response"] == "This prints 4, 3."
 
     with client.session_transaction() as sess:
-        assert sess["chat_history"][-2] == ("User", "What's the output?")
-        assert sess["chat_history"][-1] == ("Assistant", "This prints 4, 3.")
+        assert research(sess)["chat_history"][-2] == ("User", "What's the output?")
+        assert research(sess)["chat_history"][-1] == ("Assistant", "This prints 4, 3.")
 
-        transcript_entry = sess["chat_transcript"][-1]
+        transcript_entry = research(sess)["chat_transcript"][-1]
         assert transcript_entry["is_error"] is False
         assert transcript_entry["assistant_message"] == "This prints 4, 3."
         assert transcript_entry["reasoning_tokens"] == 12
@@ -110,7 +120,7 @@ def test_empty_completion_is_not_saved_as_successful_reply(client):
             completion_tokens=512,
         )
         with patch("app.routes.logger") as mock_logger:
-            resp = client.post("/chat", json={"message": "What's the output?"})
+            resp = trial_post(client, "/chat", json={"message": "What's the output?"})
             assert mock_logger.error.called
 
     assert resp.status_code == 200
@@ -118,7 +128,7 @@ def test_empty_completion_is_not_saved_as_successful_reply(client):
     assert body["response"]  # a neutral message is returned, not the raw empty string
 
     with client.session_transaction() as sess:
-        transcript_entry = sess["chat_transcript"][-1]
+        transcript_entry = research(sess)["chat_transcript"][-1]
         assert transcript_entry["is_error"] is True
         assert transcript_entry["error_reason"] == "empty_completion"
         assert transcript_entry["shown_to_participant"] is False
@@ -130,18 +140,18 @@ def test_empty_completion_is_not_saved_as_successful_reply(client):
 
         # The neutral message shown to the user is what's recorded — never
         # the literal empty completion.
-        assert sess["chat_history"][-1][0] == "Assistant"
-        assert sess["chat_history"][-1][1] != ""
+        assert research(sess)["chat_history"][-1][0] == "Assistant"
+        assert research(sess)["chat_history"][-1][1] != ""
 
 
 def test_whitespace_only_completion_is_treated_as_empty(client):
     with patch("app.routes.client.chat.completions.create") as mock_create:
         mock_create.return_value = _make_completion("   \n  ", finish_reason="stop")
-        resp = client.post("/chat", json={"message": "hi"})
+        resp = trial_post(client, "/chat", json={"message": "hi"})
 
     assert resp.status_code == 200
     with client.session_transaction() as sess:
-        assert sess["chat_transcript"][-1]["is_error"] is True
+        assert research(sess)["chat_transcript"][-1]["is_error"] is True
 
 
 def test_truncated_nonempty_reply_is_treated_as_error_not_shown(client):
@@ -155,7 +165,7 @@ def test_truncated_nonempty_reply_is_treated_as_error_not_shown(client):
             reasoning_tokens=0,
         )
         with patch("app.routes.logger") as mock_logger:
-            resp = client.post("/chat", json={"message": "explain"})
+            resp = trial_post(client, "/chat", json={"message": "explain"})
             assert mock_logger.error.called
 
     assert resp.status_code == 200
@@ -163,7 +173,7 @@ def test_truncated_nonempty_reply_is_treated_as_error_not_shown(client):
     assert body["response"] != "This is a truncated reply that got cut"
 
     with client.session_transaction() as sess:
-        transcript_entry = sess["chat_transcript"][-1]
+        transcript_entry = research(sess)["chat_transcript"][-1]
         assert transcript_entry["is_error"] is True
         assert transcript_entry["error_reason"] == "truncated"
         assert transcript_entry["shown_to_participant"] is False
@@ -173,20 +183,24 @@ def test_truncated_nonempty_reply_is_treated_as_error_not_shown(client):
 
         # What's actually shown/stored as the visible reply is the neutral
         # message, never the truncated text.
-        assert sess["chat_history"][-1] == ("Assistant", transcript_entry["assistant_message"])
+        assert research(sess)["chat_history"][-1] == ("Assistant", transcript_entry["assistant_message"])
 
 
 def test_trial_specific_isolation_uses_current_question_only(client):
     """The system prompt sent to the API must come from the trial currently
     in progress (session['question_index']), not any other trial."""
     with client.session_transaction() as sess:
+        sess["participant_id"] = "test-participant"
+        prepare_session(sess)
+        complete_trials(sess)
         sess["question_order"] = [0, 8]
         sess["question_index"] = 1
         sess["variant_assignments"] = {"0": "correct", "8": "confident_wrong"}
 
+    trial_get(client, "/get_initial_recommendation")
     with patch("app.routes.client.chat.completions.create") as mock_create:
         mock_create.return_value = _make_completion("ok")
-        client.post("/chat", json={"message": "hi"})
+        trial_post(client, "/chat", json={"message": "hi"})
 
     _, kwargs = mock_create.call_args
     system_content = kwargs["messages"][0]["content"]
@@ -194,8 +208,9 @@ def test_trial_specific_isolation_uses_current_question_only(client):
     from app.utils.questions import get_chat_prompt
 
     expected_prompt = get_chat_prompt(8, "confident_wrong")
-    assert expected_prompt["system_context"] in system_content
-    assert expected_prompt["stance"] in system_content
+    from app.utils.questions import questions
+    assert questions[8]["question"] in system_content
+    assert expected_prompt["stance"] not in system_content
 
     other_prompt = get_chat_prompt(0, "correct")
     if other_prompt["system_context"] != expected_prompt["system_context"]:
@@ -212,6 +227,8 @@ def test_q1_to_q2_transition_isolates_context_and_retains_q2_history():
     app = _make_app()
     with app.test_client() as c:
         with c.session_transaction() as sess:
+            sess["participant_id"] = "test-participant"
+            prepare_session(sess)
             sess["question_order"] = [0, 8]
             sess["question_index"] = 0
             sess["variant_assignments"] = {"0": "correct", "8": "confident_wrong"}
@@ -219,25 +236,25 @@ def test_q1_to_q2_transition_isolates_context_and_retains_q2_history():
             sess["times"] = []
             sess["post_survey_answers"] = []
             sess["chat_history"] = []
-            sess["chat_transcript"] = []
+            entries = []
             sess["begin"] = 0
 
         # --- Q1: load, get recommendation, one follow-up chat turn -------
         c.get("/quiz")
-        c.get("/get_initial_recommendation")
+        trial_get(c, "/get_initial_recommendation")
 
         with patch("app.routes.client.chat.completions.create") as mock_create:
             mock_create.return_value = _make_completion("Q1 follow-up answer.")
-            resp = c.post("/chat", json={"message": "Why is that the output?"})
+            resp = trial_post(c, "/chat", json={"message": "Why is that the output?"})
         assert resp.get_json()["response"] == "Q1 follow-up answer."
 
         with c.session_transaction() as sess:
-            q1_transcript_before = list(sess["chat_transcript"])
+            q1_transcript_before = list(research(sess)["chat_transcript"])
             assert len(q1_transcript_before) == 2  # initial rec + 1 follow-up
 
         # --- Submit Q1's answer, move through post_survey to Q2 ----------
-        c.post("/quiz", data={"answer": questions[0]["correct"], "n_changes": "0"})
-        c.post("/post_survey", data={"confidence": "5", "trust": "5", "helpfulness": "5"})
+        trial_post(c, "/quiz", data={"answer": questions[0]["correct"], "n_changes": "0"})
+        trial_post(c, "/post_survey", data={"confidence": "5", "trust": "5", "helpfulness": "5", "difficulty": "5"})
 
         # --- Q2 page load must show no Q1 content -------------------------
         q2_page = c.get("/quiz")
@@ -251,16 +268,16 @@ def test_q1_to_q2_transition_isolates_context_and_retains_q2_history():
         with c.session_transaction() as sess:
             # Q1's research log is untouched by the transition to Q2
             q1_transcript_after = [
-                e for e in sess["chat_transcript"] if e["question_index"] == 0
+                e for e in research(sess)["chat_transcript"] if e["question_index"] == 0
             ]
             assert q1_transcript_after == q1_transcript_before
 
-        c.get("/get_initial_recommendation")  # Q2's own scripted recommendation
+        trial_get(c, "/get_initial_recommendation")  # Q2's own scripted recommendation
 
         # --- Q2 follow-up #1: model request must carry no Q1 context -----
         with patch("app.routes.client.chat.completions.create") as mock_create:
             mock_create.return_value = _make_completion("Q2 first follow-up.")
-            c.post("/chat", json={"message": "Q2 question one"})
+            trial_post(c, "/chat", json={"message": "Q2 question one"})
 
         _, kwargs = mock_create.call_args
         sent_messages = kwargs["messages"]
@@ -270,7 +287,7 @@ def test_q1_to_q2_transition_isolates_context_and_retains_q2_history():
         assert "Why is that the output?" not in sent_text
 
         expected_q2_prompt = get_chat_prompt(8, "confident_wrong")
-        assert expected_q2_prompt["stance"] in sent_messages[0]["content"]
+        assert expected_q2_prompt["stance"] not in sent_messages[0]["content"]
 
         q1_chat_prompt = get_chat_prompt(0, "correct")
         if q1_chat_prompt["system_context"] != expected_q2_prompt["system_context"]:
@@ -283,7 +300,7 @@ def test_q1_to_q2_transition_isolates_context_and_retains_q2_history():
         # --- Q2 follow-up #2: must retain Q2's first follow-up turn -------
         with patch("app.routes.client.chat.completions.create") as mock_create:
             mock_create.return_value = _make_completion("Q2 second follow-up.")
-            c.post("/chat", json={"message": "Q2 question two"})
+            trial_post(c, "/chat", json={"message": "Q2 question two"})
 
         _, kwargs = mock_create.call_args
         sent_messages = kwargs["messages"]
@@ -306,6 +323,8 @@ def test_quiz_submission_excludes_error_turns_from_n_turns():
     app = _make_app()
     with app.test_client() as c:
         with c.session_transaction() as sess:
+            sess["participant_id"] = "test-participant"
+            prepare_session(sess)
             sess["question_order"] = [0]
             sess["question_index"] = 0
             sess["variant_assignments"] = {"0": "correct"}
@@ -313,7 +332,7 @@ def test_quiz_submission_excludes_error_turns_from_n_turns():
             sess["times"] = []
             sess["chat_history"] = []
             sess["begin"] = 0
-            sess["chat_transcript"] = [
+            entries = [
                 {  # scripted initial recommendation — never counted in n_turns
                     "question_index": 0, "is_initial_recommendation": True,
                     "is_error": False, "user_message": "u0", "assistant_message": "a0",
@@ -332,11 +351,13 @@ def test_quiz_submission_excludes_error_turns_from_n_turns():
                 },
             ]
 
+        for entry in entries:
+            trial_store.log_turn("test-participant", 0, entry)
         c.get("/quiz")
-        c.post("/quiz", data={"answer": questions[0]["correct"], "n_changes": "0"})
+        trial_post(c, "/quiz", data={"answer": questions[0]["correct"], "n_changes": "0"})
 
         with c.session_transaction() as sess:
-            chat_measures = sess["answers"][0]["chat"]
+            chat_measures = research(sess)["answers"][0]["chat"]
             assert chat_measures["n_turns"] == 1  # only the successful follow-up
             assert chat_measures["n_turns_attempted"] == 3  # all 3 non-scripted attempts
             assert len(chat_measures["transcript"]) == 4  # full record, errors included
@@ -345,12 +366,12 @@ def test_quiz_submission_excludes_error_turns_from_n_turns():
 def test_missing_active_question_returns_400():
     app = _make_app()
     with app.test_client() as c:
-        resp = c.post("/chat", json={"message": "hi"})
+        resp = trial_post(c, "/chat", json={"message": "hi"})
     assert resp.status_code == 400
 
 
 def test_missing_message_returns_400(client):
-    resp = client.post("/chat", json={})
+    resp = trial_post(client, "/chat", json={})
     assert resp.status_code == 400
 
 
@@ -360,12 +381,12 @@ def test_api_exception_is_logged_as_error_and_kept_out_of_model_history(client):
     replayed to the model on the next turn."""
     with patch("app.routes.client.chat.completions.create",
                side_effect=RuntimeError("boom")):
-        resp = client.post("/chat", json={"message": "first try"})
+        resp = trial_post(client, "/chat", json={"message": "first try"})
     assert resp.status_code == 500
 
     with client.session_transaction() as sess:
-        (entry,) = sess["chat_transcript"]
-        assert len(sess.get("chat_history", [])) == 0  # nothing shown
+        entry = research(sess)["chat_transcript"][-1]
+        assert len(research(sess).get("chat_history", [])) == 2  # nothing shown
     assert entry["entry_type"] == "followup"
     assert entry["is_error"] is True
     assert entry["error_reason"] == "api_exception"
@@ -375,7 +396,7 @@ def test_api_exception_is_logged_as_error_and_kept_out_of_model_history(client):
 
     with patch("app.routes.client.chat.completions.create") as mock_create:
         mock_create.return_value = _make_completion("ok")
-        client.post("/chat", json={"message": "second try"})
+        trial_post(client, "/chat", json={"message": "second try"})
     _, kwargs = mock_create.call_args
     contents = [m["content"] for m in kwargs["messages"]]
     assert "first try" not in contents

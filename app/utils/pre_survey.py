@@ -87,6 +87,6 @@ def page_field_names(page):
 def first_incomplete_page(answers):
     """1-based number of the first page with an unanswered Likert item, or None."""
     for number, page in enumerate(PRE_SURVEY_PAGES, start=1):
-        if any(not answers.get(name) for name in page_likert_names(page)):
+        if any(answers.get(name) not in {str(i) for i in range(1, 8)} for name in page_likert_names(page)):
             return number
     return None

@@ -60,7 +60,7 @@ def test_new_assignment_persists_design_metadata(db):
         record["type_at_position"]
     )
     assert isinstance(record["seed"], int)
-    assert record["rotation_scheme"] == "difficulty_balanced_v1"
+    assert record["rotation_scheme"] == "uniform_random_v1"
 
     assert result["sequence_design_version"] == "blocks_pq_v1"
     assert result["question_order"] == record["problem_at_position"]
@@ -83,6 +83,23 @@ def test_repeat_request_returns_same_assignment_and_uses_no_slot(db):
         assert get_or_create_assignment("p1", questions, "uzh") == first
     assert sum(_active_counts(db).values()) == 1
     assert len(db["participant_assignments"].docs) == 1
+
+
+def test_existing_difficulty_balanced_assignment_is_preserved(db, monkeypatch):
+    get_or_create_assignment("p1", questions, "uzh")
+    db["participant_assignments"].update_one(
+        {"participant_id": "p1"},
+        {"$set": {"rotation_scheme": "difficulty_balanced_v1"}},
+    )
+    saved = get_assignment("p1")
+
+    def must_not_redraw(*args, **kwargs):
+        raise AssertionError("existing assignment must not be recomputed")
+
+    monkeypatch.setattr(assignment_module, "build_trial_sequence", must_not_redraw)
+    assert get_or_create_assignment("p1", questions, "uzh") == saved
+    assert saved["rotation_scheme"] == "difficulty_balanced_v1"
+    assert sum(_active_counts(db).values()) == 1
 
 
 def test_get_assignment_never_creates_one(db):

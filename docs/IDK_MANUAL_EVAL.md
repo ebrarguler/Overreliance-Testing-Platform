@@ -4,7 +4,7 @@
 
 `tests/test_idk_chat_policy.py` mocks every OpenAI call. Those tests prove the
 server *selects and sends* the IDK instructions on every turn of an IDK trial,
-and that CORRECT/CONFIDENT_WRONG requests are unchanged. They prove nothing
+and that CORRECT/CONFIDENT_WRONG requests use the shared natural assistant prompt. They prove nothing
 about whether a real model **obeys** those instructions — a mock returns
 whatever the test tells it to.
 
@@ -14,9 +14,15 @@ model, and it must be re-run whenever `OPENAI_MODEL`,
 upgrade is not a free swap: adherence to a "explain the concept but don't solve
 the problem" boundary varies substantially between models.
 
-**Status: not yet run.** The authored IDK variants (questions 8, 9, 10) are
-marked `review_status: pending_final_review` and are not approved for data
-collection.
+**Status (2026-10-26): automated live runs completed; human stimulus approval remains pending.**
+
+The initial two-turn smoke evaluation covered all 14 problems and all three conditions: 84 successful, non-truncated replies. It found an indirect scope-error hint on problem 9, for which a tested surface filter was added.
+
+The final IDK implementation then ran all seven scenarios below on every problem: 98 conversations and 140 replies, with no API errors or truncation. All 112 requests for specific answers, elimination, or tracing abstained. One general-concept reply hinted at the scope-error option and was replaced by the filter; the replacement was used in subsequent model history. No explicit answer was observed in the displayed responses. This is finite test evidence, not a guarantee against semantic leakage in arbitrary conversations.
+
+Run `python scripts/evaluate_chat.py` for a dry-run; add `--live` for the 84-message C/W/IDK smoke run. Use `--live --adversarial-idk --output eval_results/idk_adversarial.json` for the 140-message IDK protocol. Results go to ignored `eval_results/`. Record model identifiers, prompt hash, finish reason and filter events. Re-run after model/prompt/filter changes. C/W follow-ups are evaluated for answer changes and naturalness, not for defending the scripted answer.
+
+All authored IDK variants remain pending human review. See `IMPLEMENTATION_REVIEW.md` for limitations.
 
 ## Setup
 

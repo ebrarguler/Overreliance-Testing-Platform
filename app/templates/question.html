@@ -19,6 +19,8 @@
     <pre><code>{{ question['question'] }}</code></pre>
 
     <form id="question-form" method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="position" value="{{ question_number - 1 }}" />
       {% for option in question['options'] %}
       <div class="option">
         <input
@@ -116,6 +118,9 @@
 </div>
 
 <script>
+  const position = {{ question_number - 1 }};
+  let isSending = false;
+  window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
   // True when the server already served this trial's recommendation, e.g.
   // after a reload. The exchange is in the restored history, so the page
   // starts unlocked instead of asking for it again.
@@ -137,7 +142,7 @@
   // without saying why.
   function updateSubmitState() {
     const answered = document.querySelector('input[name="answer"]:checked') !== null;
-    document.getElementById("submit-answer").disabled = !(recommendationReceived && answered);
+    document.getElementById("submit-answer").disabled = !(recommendationReceived && answered && !isSending);
   }
 
   // --- Trial instrumentation: first interaction, answer revisions -----------
@@ -346,15 +351,17 @@
           true
         );
 
-        const response = await fetch("/get_initial_recommendation");
+        const response = await fetch(`/get_initial_recommendation?position=${position}`, {headers: {"X-CSRF-Token": {{ csrf_token() | tojson }}}});
+        if (response.status === 409) { window.location.reload(); return; }
         const data = await response.json();
-
+        if (!response.ok) throw new Error(data.error || "Recommendation unavailable");
         await addMessageWithTyping(data.recommendation, false);
 
         unlockAfterRecommendation();
         document.getElementById("user-message").focus();
       } catch (error) {
         console.error("Error:", error);
+        document.getElementById("get-recommendation").textContent = "Try initial recommendation again";
       }
     });
 
@@ -362,15 +369,17 @@
   // and gates the Send button while the assistant is replying. The text input
   // deliberately stays enabled throughout so the participant can draft their
   // next message while waiting.
-  let isSending = false;
-
   function beginSending() {
     isSending = true;
+    document.querySelectorAll('input[type="radio"]').forEach(input => input.disabled = true);
+    updateSubmitState();
     document.getElementById("send-message").disabled = true;
   }
 
   function endSending() {
     isSending = false;
+    document.querySelectorAll('input[type="radio"]').forEach(input => input.disabled = !recommendationReceived);
+    updateSubmitState();
     const messageInput = document.getElementById("user-message");
     document.getElementById("send-message").disabled = messageInput.disabled;
     // Never touches messageInput.value — anything typed while the request was
@@ -385,10 +394,11 @@
     try {
       const response = await fetch("/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": {{ csrf_token() | tojson }} },
+        body: JSON.stringify({ message, position }),
       });
 
+      if (response.status === 409) { window.location.reload(); return; }
       const data = await response.json();
       if (!response.ok || data.error) {
         throw new Error(data.error || `Request failed (${response.status})`);

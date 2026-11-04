@@ -10,6 +10,7 @@
 		method="post"
 		class="demographics-form"
 	>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 		<div class="form-section">
 			<div class="basic-info">
 				<div class="form-row">

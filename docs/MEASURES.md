@@ -22,8 +22,8 @@ the export never pools them (§8.9).
 Every trial has a `trial_type` ∈ {`correct`, `confident_wrong`, `idk`}
 (`app/utils/trial_types.py:TrialType`). The type at each presentation
 position comes from the participant's assigned order (`app/utils/sequences.py`).
-Which problem is shown under which type is drawn per participant, balanced
-by difficulty (§6.1), so the same problem is `correct` for one participant
+Which problem is shown under which type is randomized per participant
+without difficulty labels (§6.1), so the same problem is `correct` for one participant
 and `confident_wrong` or `idk` for another.
 
 ### 1.1 Block design, orders P and Q (`sequence_design_version = "blocks_pq_v1"`, current)
@@ -144,7 +144,7 @@ Mongo document (indexed by problem id, not presentation position — see
 | `position` | int, 1–14 | Presentation position |
 | `section` | `early`\|`middle`\|`late` | Positions 1–5 / 6–10 / 11–14, from `sequences.SECTION_BOUNDARIES`; the three blocks under blocks_pq |
 | `problem_id` | int | Stable question id, independent of position |
-| `difficulty` | `easy`\|`medium`\|`hard` | The problem's difficulty label in `questions.py` (an author's label, not measured), used to balance the draw (§6.1). Absent on older records |
+| `difficulty` | `easy`\|`medium`\|`hard` | Legacy author-assigned label, retained only when present in saved records. New trials omit it; the CSV column is blank (§6.1) |
 | `trial_type` | `correct`\|`confident_wrong`\|`idk` | The variant actually shown. Use this, not `response_type` (the problem's default category in `questions.py`, kept for backward compatibility) |
 | `answer` | str | Final answer (alias: `answer_revisions.final_answer`) |
 | `correct_answer` | str | Ground truth |
@@ -370,43 +370,43 @@ so records written before this change are coded the same way.
 
 ---
 
-### 6.1 Which problem is shown under which type: balanced by difficulty
+### 6.1 Which problem is shown under which type: uniform randomization
 
-Every problem has all three variants written, and every problem can be drawn
-as any trial type (`rotation_scheme = "difficulty_balanced_v1"`, stored with
-the assignment and in `participants.csv`). Each participant's draw is
-balanced by the `difficulty` label in `questions.py`:
+New assignments use `rotation_scheme = "uniform_random_v1"`, stored with the
+assignment and in `participants.csv`. Everyone receives all 14 questions
+exactly once. Question identities are uniformly randomized across the fixed
+P/Q response-type positions, using the stored participant seed. There are
+no author-assigned difficulty labels or difficulty strata.
 
-| Type | easy | medium | hard |
-|---|---|---|---|
-| `confident_wrong` | 1 | 1 | 1 |
-| `idk` | 1 | 1 | 1 |
-| `correct` | 2 | 4 | 2 |
+With all three variants available for every question, each question has
+probability 1/14 of occupying each position, 8/14 of receiving a correct
+recommendation, and 3/14 each of receiving a wrong or IDK recommendation.
+These are probabilities across participants, not exact balancing quotas.
+P/Q allocation remains balanced by site; response-type sequences and the
+position-4 primary probe are unchanged. If variants are held out, draws are
+uniform over feasible assignments instead, so eligibility can change these
+probabilities. The sampler rejects banks without a feasible distinct-question
+assignment and never serves unavailable variants.
 
-(4 easy, 6 medium and 4 hard problems in the bank.) Per level, the W and IDK
-problems are drawn together at random from that level, then each type's
-problems are shuffled across its positions, all from the stored seed. Across
-participants each easy or hard problem is W about a quarter of the time and
-IDK about a quarter; each medium problem about a sixth each.
+Randomization prevents a particular problem being systematically tied to a
+response type, but does not remove problem-specific effects or guarantee
+finite-sample balance. Retain `problem_id` when analysing question differences.
+The participant's post-question perceived-difficulty rating remains a separate
+self-report; it is not used to assign questions.
 
-So trial type is no longer confounded with problem identity, and W and IDK
-trials have the same mix of difficulty for every participant. What remains:
+Existing participants keep their saved mapping and rotation scheme on resume.
+Earlier `difficulty_balanced_v1` assignments used unvalidated author labels:
+one easy, medium and hard problem each for W and IDK, with C taking the rest.
+Their saved answers and labels remain unchanged. Use the persisted mapping
+for these records; the current sampler does not replay the earlier algorithm.
+Separate rotation schemes in analysis (join `participants.csv` by participant
+ID); the aggregate exporter groups by sequence design, not rotation scheme,
+so filter the input records before generating scheme-specific aggregates.
 
-- The labels are the authors' judgement, not measured difficulty. Check them
-  against observed accuracy (e.g. `idk` and `correct` trials per problem)
-  before relying on them, and keep `problem_id` in models.
-- Every participant sees one IDK on a problem labelled easy. The pilot
-  suggested an IDK on an easy-looking problem reads as scripted, so consider
-  difficulty (or a perceived-difficulty rating) as a moderator of IDK
-  responses.
-- The P/Q primary probe (§8.7) is one W per participant whose difficulty
-  varies between participants; include `difficulty` or `problem_id` when
-  comparing the two contexts.
-
-Records with no `rotation_scheme` (Option 6, S1–S6, and blocks_pq records
-assigned before this change) rotated within type only: problems 0–7 were
-always `correct`, 8–10 `idk` and 11–13 `confident_wrong`, so for them trial
-type and problem identity cannot be separated.
+Records with no `rotation_scheme` (Option 6, S1–S6, and early blocks_pq
+records) rotated within type only: problems 0–7 were always `correct`, 8–10
+`idk` and 11–13 `confident_wrong`, so trial type and problem identity cannot
+be separated for those records.
 
 ---
 
@@ -536,3 +536,16 @@ the export leaves these blank rather than filling them in.
 - **`is_post_idk_cw` cannot occur under the legacy S1–S6 table, occurs
   once per participant under Option 6, and once (P) or twice (Q) under
   blocks_pq** — §5. Keep the designs apart.
+
+
+## Durable natural-chat protocol update (2026-10-26)
+
+New records log `protocol_version=durable_natural_v1` in runtime/chat metadata. C/W follow-ups are natural and may correct the scripted recommendation; analyse the assigned trial type and code subsequent replies separately. Do not pool this protocol with earlier stance-defending chat without an explicit analysis decision.
+
+Answers/ratings are stored per participant/position and exported with identity joins. `option_order`, `target_wrong_answer`, and `chose_target_wrong_answer` support same-problem comparisons across W and IDK without inventing a pre-AI answer. Per-trial `difficulty` is a legacy author's label, absent on new trials; `post_difficulty` is the participant's rating.
+
+`post_trust=not_needed` records “I didn't need AI assistance” as a separate nonnumeric category, not a trust score or evidence that the recommendation was not viewed. Current numeric choices are the full 1–7 scale, with this additional option displayed separately. Earlier versions replaced numeric 1 with this category and offered only 2–7; existing responses retain their original values. `trust_chatgpt=not_used` is also non-numeric. Final overreliance means reverse-code `questioned_recommendations` and `verified_answers` using `8 - value`.
+
+`mentioned_options` records literal mentions. `stated_option` is a conservative explicit-output match, not a full semantic classifier. Unresolved replies need human coding. `policy_filter_reason` identifies IDK outputs replaced by an abstention; raw output is retained separately. Replies marked `after_answer` are retained but excluded from pre-answer follow-up counts. Decide these exclusions and treatment of filtered replies before analysis.
+
+Completed new records require a keep decision for export; pending/withdrawn records are omitted. `attrition.csv` reports incomplete progress separately. Raw live-evaluation transcripts and research exports are ignored by Git.

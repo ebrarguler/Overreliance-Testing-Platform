@@ -49,7 +49,7 @@ every output file to one design_group.
 
 Privacy
 -------
-The study collects no email or name. Identifying fields found on legacy
+UZH collects no email or name; UF identity is stored separately. Identifying fields found on legacy
 records (email, firstName, lastName, uf_id, classSchool) are excluded at the
 query level. Participants are numbered 1, 2, 3 … in order of study
 completion (sorted by timestamp); the participant_id column is the study's
@@ -81,7 +81,9 @@ from dotenv import load_dotenv, find_dotenv  # noqa: E402
 
 load_dotenv(find_dotenv())
 
-from app.utils.db import init_db  # noqa: E402
+from app.utils.db import init_db
+from app.utils import db as database
+from app.utils import trial_store  # noqa: E402
 
 PQ_DESIGN = "blocks_pq_v1"
 LEGACY_DESIGN_GROUP = "legacy_unversioned"
@@ -179,7 +181,10 @@ def scale_mean(responses: dict, items: list) -> float | None:
     values = []
     for key in items:
         try:
-            values.append(float(responses[key]))
+            value = float(responses[key])
+            if not 1 <= value <= 7:
+                continue
+            values.append(8 - value if key in {"questioned_recommendations", "verified_answers"} else value)
         except (KeyError, TypeError, ValueError):
             pass
     if not values:
@@ -220,6 +225,14 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
         "rotation_scheme": doc.get("rotation_scheme", ""),
         "timestamp": str(doc.get("timestamp", "")),
     }
+
+    for field in DEMOGRAPHIC_FIELDS:
+        value = (doc.get("demographics") or {}).get(field, "")
+        row[field] = json.dumps(value) if isinstance(value, list) else value
+    row["n_resumes"] = doc.get("n_resumes", 0)
+    row["runtime"] = json.dumps(doc.get("runtime", {}), sort_keys=True)
+    for field in ("trust_this_assistant", "trust_chatgpt", "study_purpose_guess", "assistant_observations", "other_tools"):
+        row[field] = final.get(field, "")
 
     for scale, items in PRE_SURVEY_SCALES.items():
         row[f"pre_{scale}_mean"] = scale_mean(pre, items)
@@ -268,7 +281,13 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             # rather than emit a row of blanks that looks like real data.
             continue
 
-        post = post_surveys[pos_0] if pos_0 < len(post_surveys) else {}
+        # New records join on identity; only wholly unlabelled legacy lists
+        # use their historical presentation order.
+        if any("position" in rating for rating in post_surveys):
+            post = next((rating for rating in post_surveys
+                         if rating.get("position") == pos_0 + 1 and rating.get("question_index") == q_idx), {})
+        else:
+            post = post_surveys[pos_0] if pos_0 < len(post_surveys) else {}
         timestamps = record.get("timestamps") or {}
         revisions = record.get("answer_revisions") or {}
         covariates = record.get("covariates") or {}
@@ -292,6 +311,8 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "is_correct": record.get("is_correct", ""),
 
             "ai_endorsed_answer": record.get("ai_endorsed_answer"),
+            "target_wrong_answer": record.get("target_wrong_answer"),
+            "chose_target_wrong_answer": record.get("chose_target_wrong_answer"),
             "aligned_with_ai": record.get("aligned_with_ai"),
             "reliance_code": record.get("reliance_code", ""),
 
@@ -330,6 +351,8 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "post_confidence": post.get("confidence", ""),
             "post_trust": post.get("trust", ""),
             "post_helpfulness": post.get("helpfulness", ""),
+            "post_difficulty": post.get("difficulty", ""),
+            "option_order": json.dumps(record.get("option_order", [])),
         })
 
     return rows
@@ -400,6 +423,8 @@ def build_chat_rows(doc: dict, participant_id: int) -> list[dict]:
                 "user_message": entry.get("user_message", ""),
                 "assistant_message": entry.get("assistant_message") or "",
                 "raw_completion": entry.get("raw_completion") or "",
+                **{field: entry.get(field, "") for field in CHAT_METADATA_FIELDS},
+                "mentioned_options": json.dumps(entry.get("mentioned_options", [])),
             })
     return rows
 
@@ -528,6 +553,10 @@ def compute_aggregates_by_design(all_trial_rows: list[dict]) -> dict:
 # CSV column order
 # ---------------------------------------------------------------------------
 
+DEMOGRAPHIC_FIELDS = ["age_category", "gender", "ethnicity", "ai_usage", "ai_frequency", "ai_use_type",
+                      "academic_level", "major_category", "minor_category", "gpa", "gpa_scale"]
+CHAT_METADATA_FIELDS = ["policy_filter_reason", "after_answer", "requested_model", "response_model", "prompt_hash", "app_commit",
+                        "app_source_hash", "app_dirty", "study_phase", "protocol_version", "stated_option", "option_coding_status"]
 PARTICIPANT_FIELDS = (
     [
         "participant_id", "participant_uuid", "site", "prior_participation",
@@ -536,7 +565,8 @@ PARTICIPANT_FIELDS = (
     ]
     + [f"pre_{s}_mean" for s in PRE_SURVEY_SCALES]
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
-    + ["total_duration_s"]
+    + ["total_duration_s", "n_resumes", "runtime", "trust_this_assistant", "trust_chatgpt",
+       "study_purpose_guess", "assistant_observations", "other_tools"] + DEMOGRAPHIC_FIELDS
 )
 
 TRIAL_FIELDS = [
@@ -553,7 +583,7 @@ TRIAL_FIELDS = [
     "participant_answer",
     "correct_answer",
     "is_correct",
-    "ai_endorsed_answer",
+    "ai_endorsed_answer", "target_wrong_answer", "chose_target_wrong_answer",
     "aligned_with_ai",
     "reliance_code",
     "served_at",
@@ -584,7 +614,7 @@ TRIAL_FIELDS = [
     "confidence_rating",
     "post_confidence",
     "post_trust",
-    "post_helpfulness",
+    "post_helpfulness", "post_difficulty", "option_order",
 ]
 
 CHAT_FIELDS = [
@@ -606,8 +636,8 @@ CHAT_FIELDS = [
     "timestamp",
     "user_message",
     "assistant_message",
-    "raw_completion",
-]
+    "raw_completion", "mentioned_options",
+] + CHAT_METADATA_FIELDS
 
 # Identifying fields some legacy `users` records carry; never exported.
 IDENTIFYING_FIELDS_PROJECTION = {
@@ -640,6 +670,9 @@ def write_exports(docs: list[dict], output_dir: Path, design: str | None = None)
     for participant_id, doc in enumerate(docs, start=1):
         if design is not None and design_group(doc) != design:
             n_other_design += 1
+            continue
+        if doc.get("data_use", "keep") != "keep":
+            n_skipped += 1
             continue
         if not doc.get("question_order"):
             print(
@@ -686,6 +719,37 @@ def write_exports(docs: list[dict], output_dir: Path, design: str | None = None)
     }
 
 
+
+def write_attrition(output_dir, design=None):
+    """Export counts for all consented participants, including dropouts.
+
+    No identity, withdrawal codes, answers, or chat text are included.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for part in database.get_collection("participants").find({}, {"identity": 0, "withdrawal_code": 0}):
+        pid = part["participant_id"]
+        assignment = database.get_collection("participant_assignments").find_one({"participant_id": pid}) or {}
+        group = design_group(assignment)
+        if design and group != design:
+            continue
+        records = trial_store.trials_for(pid)
+        rows.append({"participant_uuid": pid, "site": part.get("site"), "design_group": group,
+                     "created_at": str(part.get("created_at", "")),
+                     "completed_at": str(part.get("completed_at") or ""),
+                     "n_resumes": part.get("n_resumes", 0),
+                     "answered": len(records), "rated": sum(bool(r.get("rating")) for r in records),
+                     "data_use": part.get("data_use", "pending"),
+                     "completed": bool(part.get("completed_at"))})
+    fields = ["participant_uuid", "site", "design_group", "created_at", "completed_at", "n_resumes",
+              "answered", "rated", "data_use", "completed"]
+    with (output_dir / "attrition.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return rows
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -722,9 +786,13 @@ def main() -> None:
     docs = list(collection.find({}, IDENTIFYING_FIELDS_PROJECTION).sort("timestamp", 1))
     print(f"Found {len(docs)} record(s).", file=sys.stderr)
 
-    if not docs:
-        print("Nothing to export.", file=sys.stderr)
-        return
+    for doc in docs:
+        pid = doc.get("participant_id")
+        part = database.get_collection("participants").find_one({"participant_id": pid}) or {}
+        doc["data_use"] = part.get("data_use", doc.get("data_use", "keep"))
+        if pid and trial_store.trials_for(pid):
+            doc.update(trial_store.assemble(pid, doc.get("question_order", [])))
+    write_attrition(output_dir, design=args.design)
 
     summary = write_exports(docs, output_dir, design=args.design)
 

@@ -1,0 +1,11 @@
+{% extends "base.html" %}{% block content %}
+<div class="container"><h2>Withdraw your study responses</h2>
+{% if message %}<p role="status">{{ message }}</p>{% endif %}
+{% if available %}<form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label for="withdrawal_code">Withdrawal code</label>
+<input name="withdrawal_code" id="withdrawal_code" maxlength="128" required autocomplete="off">
+<button type="submit" class="survey-btn">Withdraw my responses from research analysis</button>
+</form>{% else %}<p>The withdrawal deadline has passed. Please contact the study team with any questions.</p>{% endif %}
+</div>
+{% endblock %}

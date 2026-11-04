@@ -1,113 +1,15 @@
-{% extends "base.html" %} {% block content %}
+{% extends "base.html" %}{% block content %}
 <div class="container">
-	<h2>Question {{ question_number }} of {{ total_questions }}: your rating</h2>
-	<div
-		class="progress-track"
-		role="progressbar"
-		aria-label="Progress through the questions"
-		aria-valuemin="0"
-		aria-valuemax="{{ total_questions }}"
-		aria-valuenow="{{ question_number }}"
-	>
-		<div
-			class="progress-fill"
-			style="width: {{ (100 * question_number / total_questions) | round(1) }}%"
-		></div>
-	</div>
-
-	<form
-		method="POST"
-		action="{{ url_for('main.post_survey') }}"
-		class="survey-form"
-	>
-		<div class="form-group">
-			<div class="likert-group">
-				<hr size="1" class="hrline" color="f1f1f1" />
-				<p>I feel confident about the answer I provided</p>
-				<div>
-					<div class="likert-scale">
-						{% for i in range(1, 8) %}
-						<div class="likert-option">
-							<input
-								type="radio"
-								id="conf_{{ i }}"
-								name="confidence"
-								value="{{ i }}"
-								required
-							/>
-						</div>
-						{% endfor %}
-					</div>
-					<div class="likert-scale">
-						<div>Strongly<br />Disagree</div>
-						<div>Disagree</div>
-						<div>Somewhat<br />Disagree</div>
-						<div>Neutral</div>
-						<div>Somewhat<br />Agree</div>
-						<div>Agree</div>
-						<div>Strongly<br />Agree</div>
-					</div>
-				</div>
-
-				<hr size="1" class="hrline" color="f1f1f1" />
-				<p>I trusted the recommendation provided by the AI assistant</p>
-				<div>
-					<div class="likert-scale">
-						{% for i in range(1, 8) %}
-						<div class="likert-option">
-							<input
-								type="radio"
-								id="conf_{{ i }}"
-								name="trust"
-								value="{{ i }}"
-								required
-							/>
-						</div>
-						{% endfor %}
-					</div>
-					<div class="likert-scale">
-						<div>Strongly<br />Disagree</div>
-						<div>Disagree</div>
-						<div>Somewhat<br />Disagree</div>
-						<div>Neutral</div>
-						<div>Somewhat<br />Agree</div>
-						<div>Agree</div>
-						<div>Strongly<br />Agree</div>
-					</div>
-				</div>
-
-				<hr size="1" class="hrline" color="f1f1f1" />
-				<p>The AI assistant's reccomendation was helpful</p>
-				<div>
-					<div class="likert-scale">
-						{% for i in range(1, 8) %}
-						<div class="likert-option">
-							<input
-								type="radio"
-								id="conf_{{ i }}"
-								name="helpfulness"
-								value="{{ i }}"
-								required
-							/>
-						</div>
-						{% endfor %}
-					</div>
-					<div class="likert-scale">
-						<div>Strongly<br />Disagree</div>
-						<div>Disagree</div>
-						<div>Somewhat<br />Disagree</div>
-						<div>Neutral</div>
-						<div>Somewhat<br />Agree</div>
-						<div>Agree</div>
-						<div>Strongly<br />Agree</div>
-					</div>
-				</div>
-			</div>
-		</div>
-
-		<button type="submit" class="survey-btn">
-			{% if is_last_question %}Continue to final survey{% else %}Next question{% endif %}
-		</button>
-	</form>
+  <h2>Question {{ question_number }} of {{ total_questions }}: your rating</h2>
+  <div class="progress-track" role="progressbar" aria-label="Progress through the questions" aria-valuemin="0" aria-valuemax="{{ total_questions }}" aria-valuenow="{{ question_number }}">
+    <div class="progress-fill" style="width: {{ (100 * question_number / total_questions) | round(1) }}%"></div>
+  </div>
+  {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+  <form method="POST" class="survey-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="position" value="{{ question_number - 1 }}">
+    {% for name, label in post_items.items() %}{% include "_likert_item.html" %}{% endfor %}
+    <button type="submit" class="survey-btn">{% if is_last_question %}Continue to final survey{% else %}Next question{% endif %}</button>
+  </form>
 </div>
 {% endblock %}

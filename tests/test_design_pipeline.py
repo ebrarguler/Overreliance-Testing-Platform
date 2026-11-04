@@ -1,3 +1,5 @@
+from tests.helpers import prepare_session, research, trial_get, trial_post, complete_trials
+from app.utils import trial_store
 """
 End-to-end test of the current block design (orders P/Q) through the real
 routes: consent → assignment → 14 trials (initial recommendation, follow-up
@@ -57,6 +59,7 @@ def client(db):
         template_folder=str(Path(__file__).resolve().parent.parent / "app" / "templates"),
     )
     app.secret_key = "test-secret"
+    app.config["CSRF_ENABLED"] = False
     app.register_blueprint(main_bp)
     return app.test_client()
 
@@ -73,12 +76,12 @@ def _completion(content):
 
 def _consent(client):
     client.get("/start/uzh")
-    client.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
 
 
 def _session(client):
     with client.session_transaction() as sess:
-        return dict(sess)
+        return research(sess)
 
 
 # Design identifiers that would reveal the manipulation if they reached a
@@ -92,6 +95,8 @@ _DESIGN_TERMS = ("option6", "blocks_pq", "sequence_label", "sequence_design",
 def _run_study(client):
     """Complete all 14 trials. Returns the list of OpenAI request kwargs."""
     sent = []
+    with client.session_transaction() as sess:
+        prepare_session(sess)
     state = _session(client)
     order, variants = state["question_order"], state["variant_assignments"]
     idk_wordings = iter(state["idk_phrasing_order"])
@@ -105,7 +110,7 @@ def _run_study(client):
         # A refresh shows the same question.
         assert client.get("/quiz").get_data(as_text=True) == html
 
-        rec = client.get("/get_initial_recommendation").get_json()
+        rec = trial_get(client, "/get_initial_recommendation").get_json()
         if variant == I:
             # The participant's next IDK wording, in their own order.
             assert rec["recommendation"] == IDK_ABSTENTIONS[next(idk_wordings)]
@@ -119,20 +124,21 @@ def _run_study(client):
             return _completion(f"reply for position {position}")
 
         with patch("app.routes.client.chat.completions.create", side_effect=reply):
-            client.post("/chat", json={"message": f"why? (position {position})"})
+            trial_post(client, "/chat", json={"message": f"why? (position {position})"})
 
         if position == 5:
             # A technical error: kept in the transcript, never sent as history.
             with patch("app.routes.client.chat.completions.create",
                        side_effect=RuntimeError("network down")):
-                resp = client.post("/chat", json={"message": "retry me"})
+                resp = trial_post(client, "/chat", json={"message": "retry me"})
             assert resp.status_code == 500
 
         answer = questions[q_idx]["correct"] if position % 2 else questions[q_idx]["options"][0]
-        client.post("/quiz", data={"answer": answer, "n_changes": "0"})
-        client.post("/post_survey", data={"confidence": "4", "trust": "4", "helpfulness": "4"})
+        trial_post(client, "/quiz", data={"answer": answer, "n_changes": "0"})
+        trial_post(client, "/post_survey", data={"confidence": "4", "trust": "4", "helpfulness": "4", "difficulty": "4"})
 
     client.post("/final_survey", data={name: "4" for name in FINAL_SURVEY_FIELDS})
+    client.post("/debrief", data={"choice": "keep"})
     return sent
 
 
@@ -155,7 +161,10 @@ def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, force
     # --- follow-up prompts used the assigned variant, with no design data -----
     for call in sent:
         system = call["messages"][0]["content"]
-        assert get_chat_prompt(call["q_idx"], call["variant"])["stance"] in system
+        if call["variant"] == I:
+            assert get_chat_prompt(call["q_idx"], call["variant"])["stance"] in system
+        else:
+            assert get_chat_prompt(call["q_idx"], call["variant"])["stance"] not in system
         all_text = " ".join(m["content"] for m in call["messages"])
         for term in _DESIGN_TERMS:
             assert term not in all_text
@@ -175,16 +184,14 @@ def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, force
     assert doc["sequence_label"] == label
     assert doc["type_at_position"] == expected_types == assignment["type_at_position"]
     assert doc["rotation_seed"] == assignment["seed"]
-    assert doc["rotation_scheme"] == assignment["rotation_scheme"] == "difficulty_balanced_v1"
+    assert doc["rotation_scheme"] == assignment["rotation_scheme"] == "uniform_random_v1"
     assert doc["question_order"] == assignment["problem_at_position"]
 
     trials = [doc["answers"][q] for q in doc["question_order"]]
     assert [t["position"] for t in trials] == list(range(1, 15))
     assert [t["trial_type"] for t in trials] == expected_types
     assert len({t["problem_id"] for t in trials}) == 14
-    for trial_type in (W, I):
-        levels = sorted(t["difficulty"] for t in trials if t["trial_type"] == trial_type)
-        assert levels == ["easy", "hard", "medium"]
+    assert all("difficulty" not in t for t in trials)
     for t in trials:
         assert t["sequence_design_version"] == "blocks_pq_v1"
         if t["trial_type"] == I:
@@ -221,7 +228,7 @@ def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, force
     assert p_row["sequence"] == label
     assert p_row["participant_uuid"] == doc["participant_id"]
     assert p_row["rotation_seed"] == str(assignment["seed"])
-    assert p_row["rotation_scheme"] == "difficulty_balanced_v1"
+    assert p_row["rotation_scheme"] == "uniform_random_v1"
 
     with open(tmp_path / "trials.csv") as f:
         rows = list(csv.DictReader(f))
@@ -232,7 +239,7 @@ def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, force
         assert row["sequence_id"] == label
         assert row["position"] == str(t["position"])
         assert row["problem_id"] == str(t["problem_id"])
-        assert row["difficulty"] == t["difficulty"]
+        assert row["difficulty"] == ""  # legacy export column
         assert row["trial_type"] == t["trial_type"]
         assert row["is_primary_pq_probe"] == str(t["is_primary_pq_probe"])
         assert row["pq_probe_context"] == (t["pq_probe_context"] or "")

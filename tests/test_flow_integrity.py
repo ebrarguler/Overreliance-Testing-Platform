@@ -1,3 +1,5 @@
+from tests.helpers import prepare_session, research, trial_get, trial_post, complete_trials
+from app.utils import trial_store
 """
 Server-side checks on the trial flow (app/routes.py quiz / post_survey /
 final_survey / chat / initial_recommendation). Each test covers a way the
@@ -19,7 +21,7 @@ from tests.fake_mongo import FakeDB
 
 pytestmark = pytest.mark.filterwarnings("ignore:The 'session' cookie is too large")
 
-RATING = {"confidence": "4", "trust": "4", "helpfulness": "4"}
+RATING = {"confidence": "4", "trust": "4", "helpfulness": "4", "difficulty": "4"}
 FINAL = {name: "4" for name in FINAL_SURVEY_FIELDS}
 TRIAL_TYPE_VALUES = ("correct", "confident_wrong", "idk")
 
@@ -40,10 +42,11 @@ def client(db):
         template_folder=str(Path(__file__).resolve().parent.parent / "app" / "templates"),
     )
     app.secret_key = "test-secret"
+    app.config["CSRF_ENABLED"] = False
     app.register_blueprint(main_bp)
     c = app.test_client()
     c.get("/start/uzh")
-    c.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    c.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
     # Demographics and pre-survey done, so the resume logic points at the quiz.
     with c.session_transaction() as sess:
         sess["demographics"] = {"age_category": "21"}
@@ -55,7 +58,7 @@ def client(db):
 
 def _state(client):
     with client.session_transaction() as sess:
-        return dict(sess)
+        return research(sess)
 
 
 def _current_question(client):
@@ -65,29 +68,29 @@ def _current_question(client):
 
 def _answer(client, option=0):
     client.get("/quiz")
-    client.get("/get_initial_recommendation")
+    trial_get(client, "/get_initial_recommendation")
     question = _current_question(client)
-    client.post("/quiz", data={"answer": question["options"][option]})
+    trial_post(client, "/quiz", data={"answer": question["options"][option]})
     return question
 
 
 def test_recommendation_response_does_not_reveal_the_trial_type(client):
     client.get("/quiz")
-    resp = client.get("/get_initial_recommendation")
+    resp = trial_get(client, "/get_initial_recommendation")
     assert set(resp.get_json()) == {"recommendation"}
     body = resp.get_data(as_text=True)
     assert not any(value in body for value in TRIAL_TYPE_VALUES)
 
     # A repeat request (page reload) goes through the early-return path.
-    again = client.get("/get_initial_recommendation")
+    again = trial_get(client, "/get_initial_recommendation")
     assert set(again.get_json()) == {"recommendation"}
 
 
 def test_resubmitting_the_post_survey_does_not_skip_a_question(client):
     _answer(client)
-    client.post("/post_survey", data=RATING)
+    trial_post(client, "/post_survey", data=RATING)
     # Back to the rating page and submit it again.
-    resp = client.post("/post_survey", data=RATING)
+    resp = trial_post(client, "/post_survey", data=RATING)
 
     state = _state(client)
     assert state["question_index"] == 1
@@ -100,7 +103,7 @@ def test_going_back_to_an_answered_question_keeps_the_recorded_answer(client):
     q_index = _state(client)["question_order"][0]
 
     assert client.get("/quiz").headers["Location"].endswith("/post_survey")
-    client.post("/quiz", data={"answer": question["options"][1]})
+    trial_post(client, "/quiz", data={"answer": question["options"][1]})
 
     assert _state(client)["answers"][q_index]["answer"] == question["options"][0]
 
@@ -108,25 +111,25 @@ def test_going_back_to_an_answered_question_keeps_the_recorded_answer(client):
 def test_answer_before_the_recommendation_is_not_recorded(client):
     client.get("/quiz")
     question = _current_question(client)
-    client.post("/quiz", data={"answer": question["options"][0]})
+    trial_post(client, "/quiz", data={"answer": question["options"][0]})
 
     state = _state(client)
-    assert state["answers"] == []
+    assert not any(state["answers"])
     assert state["question_index"] == 0
     assert client.get("/post_survey").headers["Location"].endswith("/quiz")
 
 
 def test_answer_that_is_not_one_of_the_options_is_not_recorded(client):
     client.get("/quiz")
-    client.get("/get_initial_recommendation")
-    client.post("/quiz", data={"answer": "not an option"})
+    trial_get(client, "/get_initial_recommendation")
+    trial_post(client, "/quiz", data={"answer": "not an option"})
 
-    assert _state(client)["answers"] == []
+    assert not any(_state(client)["answers"])
 
 
 def test_post_survey_rating_is_stored_with_its_question(client):
     _answer(client)
-    client.post("/post_survey", data=RATING)
+    trial_post(client, "/post_survey", data=RATING)
 
     state = _state(client)
     q_index = state["question_order"][0]
@@ -140,7 +143,7 @@ def test_post_survey_rating_is_stored_with_its_question(client):
 
 def test_incomplete_post_survey_is_rejected(client):
     _answer(client)
-    resp = client.post("/post_survey", data={"confidence": "4"})
+    resp = trial_post(client, "/post_survey", data={"confidence": "4"})
 
     assert resp.status_code == 400
     assert _state(client)["question_index"] == 0
@@ -148,7 +151,7 @@ def test_incomplete_post_survey_is_rejected(client):
 
 def test_final_survey_before_the_last_question_saves_nothing(client, db):
     _answer(client)
-    client.post("/post_survey", data=RATING)
+    trial_post(client, "/post_survey", data=RATING)
 
     resp = client.post("/final_survey", data=FINAL)
 
@@ -160,6 +163,7 @@ def test_final_survey_before_the_last_question_saves_nothing(client, db):
 
 def test_final_survey_with_missing_answers_is_rejected(client, db):
     with client.session_transaction() as sess:
+        complete_trials(sess)
         sess["question_index"] = len(sess["question_order"])
 
     partial = dict(FINAL)
@@ -176,21 +180,21 @@ def test_chat_and_recommendation_are_closed_once_the_question_is_answered(client
     transcript_before = list(_state(client)["chat_transcript"])
 
     with patch("app.routes.client.chat.completions.create") as mock_create:
-        resp = client.post("/chat", json={"message": "and now?"})
+        resp = trial_post(client, "/chat", json={"message": "and now?"})
     mock_create.assert_not_called()
     assert resp.status_code == 409
-    assert client.get("/get_initial_recommendation").status_code == 409
+    assert trial_get(client, "/get_initial_recommendation").status_code == 409
     assert _state(client)["chat_transcript"] == transcript_before
 
 
 def test_chat_error_details_stay_on_the_server(client):
     client.get("/quiz")
-    client.get("/get_initial_recommendation")
+    trial_get(client, "/get_initial_recommendation")
     with patch(
         "app.routes.client.chat.completions.create",
         side_effect=RuntimeError("secret upstream detail"),
     ):
-        resp = client.post("/chat", json={"message": "why?"})
+        resp = trial_post(client, "/chat", json={"message": "why?"})
 
     assert resp.status_code == 500
     assert "secret upstream detail" not in resp.get_data(as_text=True)

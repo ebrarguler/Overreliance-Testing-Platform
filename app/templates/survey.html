@@ -4,6 +4,7 @@
 <h1>{{ survey_type }} Survey</h1>
 
 <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="survey-question">
         <h3>{{ questions[0]['question'] }}</h3>
         {% for option in questions[0]['options'] %}

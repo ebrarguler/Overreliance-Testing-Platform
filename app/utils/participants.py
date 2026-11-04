@@ -18,8 +18,8 @@ Repeat participation is discouraged by:
   - a long-lived browser cookie holding only the participant_id, so the
     same browser resumes an unfinished attempt and is turned away after
     finishing. Clearing cookies or switching devices bypasses it;
-  - for UF only, the email: a returning email resumes or is turned away
-    whatever browser it uses.
+  - UF email uniqueness blocks duplicate enrolment but never authenticates
+    a different browser. Resume requires the existing participant cookie.
 """
 
 import datetime
@@ -85,14 +85,14 @@ def create_participant(site, prior_participation, identity=None):
     """
     Create a participant on consent. `identity` (UF only) is the start-page
     form: {email, uf_id, firstName, lastName, classSchool}. If that email
-    already has a record (a concurrent submit), that record is returned.
+    already has a record (including a concurrent submit), registration is rejected.
     """
     record = {
         "participant_id": str(uuid.uuid4()),
         "site": site,
         "prior_participation": prior_participation,
         "participated_before": participated_before(prior_participation),
-        "created_at": datetime.datetime.utcnow(),
+        "created_at": datetime.datetime.now(datetime.timezone.utc),
         "completed_at": None,
     }
     if identity:
@@ -107,7 +107,7 @@ def create_participant(site, prior_participation, identity=None):
             if identity:
                 existing = find_participant_by_email(identity["email"])
                 if existing is not None:
-                    return existing
+                    raise ValueError("An existing email cannot authenticate a new browser")
             # Otherwise a uuid4 collision; vanishingly unlikely.
             record["participant_id"] = str(uuid.uuid4())
 
@@ -122,8 +122,18 @@ def find_participant_by_email(email):
     return _participants_collection().find_one({"identity.email": email})
 
 
+def note_resume(participant_id):
+    """Count a return after the session was lost (same browser or, for UF,
+    the same email). The participant continues where their stored data
+    says they were; the count is kept for reporting."""
+    _participants_collection().update_one(
+        {"participant_id": participant_id},
+        {"$inc": {"n_resumes": 1}},
+    )
+
+
 def mark_completed(participant_id):
     _participants_collection().update_one(
         {"participant_id": participant_id, "completed_at": None},
-        {"$set": {"completed_at": datetime.datetime.utcnow()}},
+        {"$set": {"completed_at": datetime.datetime.now(datetime.timezone.utc)}},
     )

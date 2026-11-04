@@ -11,23 +11,30 @@ def create_app():
     # validation — to run as a side effect. The app itself still validates
     # fully the moment it's actually created.
     from .routes import main_bp
-    from .utils.db import get_client
+    from .utils.db import get_client, database_name
+
+    from .utils.readiness import validate_launch
+    validate_launch()
 
     # Initialize application
     app = Flask(__name__)
 
     # Initialize environment variable
     app.secret_key = os.getenv('APP_SECRET_KEY')
+    if not app.secret_key:
+        raise RuntimeError('APP_SECRET_KEY must be configured')
 
-    # Server-side sessions: the per-trial data now stored in session["answers"]
-    # (timestamps, chat transcripts, covariates — see app.utils.measures) is
-    # far too large for Flask's default signed-cookie session, which caps out
-    # around 4KB and fails *silently* past that (the browser just drops the
-    # cookie update, corrupting the participant's progress mid-study). Session
-    # data itself lives server-side in MongoDB; the cookie only holds a session id.
+    # MongoDB sessions hold assignment/cursor and survey caches. Research
+    # answers and chat are written independently by trial_store, so parallel
+    # model requests cannot overwrite them through a stale session snapshot.
     app.config["SESSION_TYPE"] = "mongodb"
     app.config["SESSION_MONGODB"] = get_client()
     app.config["SESSION_SERIALIZATION_FORMAT"] = "json"  # avoids an extra msgpack dependency
+    app.config["SESSION_MONGODB_DB"] = database_name()
+    app.config["SESSION_REFRESH_EACH_REQUEST"] = False
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = os.getenv("STUDY_PHASE", "pilot") == "main"
     Session(app)
 
     # Load configuration for application

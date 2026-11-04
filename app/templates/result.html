@@ -3,6 +3,7 @@ quiz. Now we'd like to ask you some general questions about trust and
 acceptance.
 
 <form action="{{ url_for('main.submit_survey') }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="survey-question">
     <h3>1. How much do you generally trust information you find online?</h3>
     <select name="trust_online" required>

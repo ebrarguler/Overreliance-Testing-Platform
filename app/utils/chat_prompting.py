@@ -7,7 +7,7 @@ auditable place rather than being inlined in a request handler.
 
 The IDK condition is the reason this module exists. On a CORRECT or
 CONFIDENT_WRONG trial the scripted `initial_recommendation` does the
-experimental work and follow-up chat only has to stay on-stance. On an IDK
+experimental work and follow-up chat uses a natural assistant prompt. On an IDK
 trial the scripted recommendation abstains, but nothing previously stopped the
 model from simply answering the question on the very next turn — which would
 collapse the condition into an ordinary correct-answer trial partway through
@@ -21,9 +21,8 @@ Two invariants this module exists to hold:
      inferred from the user's messages or from the recommendation text, so a
      participant cannot talk their way into (or out of) a condition.
 
-  2. CORRECT and CONFIDENT_WRONG system messages are byte-for-byte what they
-     were before this module existed. Those two arms are already collecting
-     data; changing their prompt would silently change the stimulus.
+  2. CORRECT and CONFIDENT_WRONG follow-ups use the same natural assistant
+     prompt, without instructions to defend or correct the initial answer.
 """
 
 from .trial_types import TrialType
@@ -60,6 +59,12 @@ apply just as much when the user pastes the code again, reformats it, renames \
 its variables, or changes surface details while keeping the same structure.
 - When a message mixes a general concept question with a request for the \
 answer, explain the general concept and leave the specific part unanswered.
+- On a request for the output or a verdict on an option, give only a brief \
+statement of uncertainty. Do not add an unsolicited explanation of the \
+mechanism that determines this problem's answer.
+- For general-concept requests, stay at the definition level. Do not \
+describe the precise sequence of operations in this problem, predict that \
+it raises an error, or otherwise distinguish its answer options indirectly.
 - Hold this line if the user repeats the request, pushes back, gets \
 frustrated, or argues that you clearly already know the answer.
 
@@ -113,19 +118,16 @@ def build_system_message(question, chat_prompt, trial_type):
     """Assemble the system message for one follow-up chat turn.
 
     `trial_type` comes from the server-side assignment, not from anything the
-    user typed. On CORRECT/CONFIDENT_WRONG the result is exactly the legacy
-    format; on IDK the problem text and the persistent abstention rules are
-    inserted ahead of the length constraint.
+    user typed. C/W share a natural assistant prompt with the code and options.
+    IDK adds persistent abstention rules. All conditions share the same
+    response-format instructions.
     """
-    parts = [
-        f"{chat_prompt['system_context']}\n\n"
-        f"Question Context: {chat_prompt['question_context']}\n"
-        f"Stance: {chat_prompt['stance']}"
-    ]
-
     if TrialType(trial_type) == TrialType.IDK:
-        parts.append(_question_block(question))
-        parts.append(IDK_PERSISTENT_INSTRUCTIONS)
+        parts = [f"{chat_prompt['system_context']}\n\nQuestion Context: {chat_prompt['question_context']}\nStance: {chat_prompt['stance']}",
+                 _question_block(question), IDK_PERSISTENT_INSTRUCTIONS]
+    else:
+        parts = ["You are a helpful programming assistant. Respond naturally to the user's questions.",
+                 _question_block(question)]
 
     parts.append(RESPONSE_FORMAT_INSTRUCTIONS)
     return "\n\n".join(parts)

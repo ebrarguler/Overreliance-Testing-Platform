@@ -1,3 +1,5 @@
+from tests.helpers import prepare_session, research, trial_get, trial_post, complete_trials
+from app.utils import trial_store
 """
 Demographics page (app/routes.py collect_demographics): one study-level list
 for every site, and each site's own grade scale stored with the answer.
@@ -33,6 +35,7 @@ def client():
             template_folder=str(Path(__file__).resolve().parent.parent / "app" / "templates"),
         )
         app.secret_key = "test-secret"
+        app.config["CSRF_ENABLED"] = False
         app.register_blueprint(main_bp)
         yield app.test_client()
 
@@ -41,7 +44,7 @@ def _enter(client, site):
     client.get(f"/start/{site}")
     if site == "uf":
         client.post("/validate_email", data=UF_FORM)
-    client.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
 
 
 def _demographics(client):

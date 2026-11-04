@@ -11,6 +11,7 @@
         <h1>Question {{ question_number }}</h1>
         <p>{{ question['question'] }}</p>
         <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="options">
                 {% for option in question['options'] %}
                 <label class="option">

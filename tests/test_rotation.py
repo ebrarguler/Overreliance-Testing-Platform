@@ -31,18 +31,16 @@ def _todo():
 @pytest.fixture
 def synthetic_questions():
     """8 questions eligible only for CORRECT, 6 eligible for {CONFIDENT_WRONG,
-    IDK} — two of each difficulty, so W and IDK can each get one per level."""
+    IDK}. No difficulty labels are needed."""
     questions = []
     for i in range(8):
         questions.append({
             "id": i,
-            "difficulty": "medium",
             "variants": {"correct": _authored(), "confident_wrong": _todo(), "idk": _todo()},
         })
-    for i, level in zip(range(8, 14), ["easy", "easy", "medium", "medium", "hard", "hard"]):
+    for i in range(8, 14):
         questions.append({
             "id": i,
-            "difficulty": level,
             "variants": {"correct": _todo(), "confident_wrong": _authored(), "idk": _authored()},
         })
     return questions
@@ -145,35 +143,17 @@ def test_w_questions_rotate_across_positions_4_7_13(seq_index):
 
 
 # ---------------------------------------------------------------------------
-# Balancing by difficulty (sequences.ROTATION_SCHEME)
+# Uniform randomization (sequences.ROTATION_SCHEME)
 # ---------------------------------------------------------------------------
 
 from collections import Counter  # noqa: E402
+from copy import deepcopy  # noqa: E402
+from itertools import permutations  # noqa: E402
+import random  # noqa: E402
 
-from app.utils.sequences import (  # noqa: E402
-    DIFFICULTY_LEVELS,
-    validate_pool_sufficiency,
-)
+from app.utils.sequences import validate_pool_sufficiency, _assign_problems  # noqa: E402
 
 C, W, I = "correct", "confident_wrong", "idk"
-
-
-def _levels_by_type(order, variants, bank):
-    by_type = {C: Counter(), W: Counter(), I: Counter()}
-    for q in order:
-        by_type[variants[str(q)]][bank[q]["difficulty"]] += 1
-    return by_type
-
-
-@pytest.mark.parametrize("seq_index", range(len(SEQUENCES)), ids=SEQUENCE_LABELS)
-@pytest.mark.parametrize("seed", range(40))
-def test_each_participant_gets_one_w_and_one_idk_per_difficulty(seq_index, seed):
-    order, variants, _, _ = build_trial_sequence(seq_index, real_questions, seed=seed)
-    by_type = _levels_by_type(order, variants, real_questions)
-    one_each = {level: 1 for level in DIFFICULTY_LEVELS}
-    assert by_type[W] == one_each
-    assert by_type[I] == one_each
-    assert by_type[C] == {"easy": 2, "medium": 4, "hard": 2}
 
 
 def test_every_problem_is_shown_as_every_type_across_participants():
@@ -185,40 +165,65 @@ def test_every_problem_is_shown_as_every_type_across_participants():
     assert all(types == {C, W, I} for types in seen.values()), seen
 
 
-def test_problems_of_a_level_are_drawn_equally_often():
-    # Each hard (and each easy) problem should be W and IDK about a quarter
-    # of the time; each medium one about a sixth.
+def test_all_problems_have_equal_type_and_position_probabilities():
     counts = {q: Counter() for q in range(14)}
+    positions = {q: Counter() for q in range(14)}
     n = 3000
     for seed in range(n):
-        _, variants, _, _ = build_trial_sequence(0, real_questions, seed=seed)
-        for q, t in variants.items():
-            counts[int(q)][t] += 1
-    for q, c in counts.items():
-        expected = 1 / 6 if real_questions[q]["difficulty"] == "medium" else 1 / 4
-        for t in (W, I):
-            assert abs(c[t] / n - expected) < 0.04, (q, t, c[t] / n)
+        order, variants, _, _ = build_trial_sequence(seed % 2, real_questions, seed=seed)
+        for pos, q in enumerate(order):
+            counts[q][variants[str(q)]] += 1
+            positions[q][pos] += 1
+    for q in counts:
+        for t, expected in ((C, 8 / 14), (W, 3 / 14), (I, 3 / 14)):
+            assert abs(counts[q][t] / n - expected) < 0.04
+        for pos in range(14):
+            assert abs(positions[q][pos] / n - 1 / 14) < 0.025
 
 
-def test_rotate_problems_false_picks_the_lowest_index_per_level(monkeypatch):
+def test_difficulty_labels_are_absent_and_cannot_influence_assignment():
+    assert all("difficulty" not in q for q in real_questions)
+    labelled = deepcopy(real_questions)
+    for q in labelled:
+        q["difficulty"] = "arbitrary label"
+    validate_pool_sufficiency(labelled)
+    for seq_index in range(len(SEQUENCES)):
+        assert build_trial_sequence(seq_index, labelled, seed=42) == build_trial_sequence(
+            seq_index, real_questions, seed=42)
+
+
+def test_rotate_problems_false_uses_bank_order(monkeypatch):
     monkeypatch.setattr(seq_module, "ROTATE_PROBLEMS", False)
-    order, variants, _, seed = build_trial_sequence(0, real_questions)
+    order, _, _, seed = build_trial_sequence(0, real_questions)
     assert seed is None
-    idk = sorted(int(q) for q, t in variants.items() if t == I)
-    wrong = sorted(int(q) for q, t in variants.items() if t == W)
-    # Lowest easy/medium/hard for IDK (0, 2, 8), the next ones for W (1, 4, 9).
-    assert idk == [0, 2, 8] and wrong == [1, 4, 9]
+    assert order == list(range(14))
 
 
-def test_a_bank_that_cannot_be_balanced_is_rejected(synthetic_questions):
-    synthetic_questions[12]["difficulty"] = "medium"  # only one hard problem left
-    with pytest.raises(ValueError, match="medium|hard"):
+def test_insufficient_distinct_eligible_questions_are_rejected(synthetic_questions):
+    # Each type has enough candidates individually, but W and IDK together
+    # need six distinct questions and now share only five.
+    synthetic_questions[13]["variants"] = {
+        C: _authored(), W: _todo(), I: _todo(),
+    }
+    with pytest.raises(ValueError, match="no feasible assignment"):
         build_trial_sequence(0, synthetic_questions, seed=1)
-    with pytest.raises(ValueError, match="medium|hard"):
+    with pytest.raises(ValueError, match="no feasible assignment"):
         validate_pool_sufficiency(synthetic_questions)
 
 
-def test_an_unknown_difficulty_label_is_rejected_at_startup(synthetic_questions):
-    synthetic_questions[0]["difficulty"] = "very hard"
-    with pytest.raises(ValueError, match="very hard"):
-        validate_pool_sufficiency(synthetic_questions)
+def test_restricted_pool_draws_match_uniform_feasible_assignments():
+    # Includes a surplus question and overlapping eligibility: greedy random
+    # choices can bias the draw or exhaust another type's candidates.
+    eligibility = [{C, W}, {C}, {W, I}, {C, I}]
+    bank = [{"id": j, "variants": {t: _authored() if t in allowed else _todo()
+                                   for t in (C, W, I)}}
+            for j, allowed in enumerate(eligibility)]
+    feasible = {order for order in permutations(range(4), 3)
+                if all(t in eligibility[q] for t, q in zip((C, W, I), order))}
+    counts = Counter()
+    for seed in range(3000):
+        assigned = _assign_problems("test", [C, W, I], bank, random.Random(seed))
+        counts[tuple(assigned[t][0] for t in (C, W, I))] += 1
+    assert set(counts) == feasible
+    assert all(abs(count / 3000 - 1 / len(feasible)) < 0.025
+               for count in counts.values())

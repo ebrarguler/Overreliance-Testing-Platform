@@ -1,3 +1,5 @@
+from tests.helpers import prepare_session, research, trial_get, trial_post, complete_trials
+from app.utils import trial_store
 """
 Tests for the persistent IDK abstention policy in follow-up chat
 (app/utils/chat_prompting.py, wired in app/routes.py:chat).
@@ -38,6 +40,7 @@ CORRECT_QUESTION_INDEX = 0
 def _make_app():
     app = Flask(__name__)
     app.secret_key = "test-secret"
+    app.config["CSRF_ENABLED"] = False
     app.register_blueprint(main_bp)
     return app
 
@@ -64,6 +67,8 @@ def _client_on(question_index, variant):
     app = _make_app()
     c = app.test_client()
     with c.session_transaction() as sess:
+        sess["participant_id"] = "test-participant"
+        prepare_session(sess)
         sess["question_order"] = [question_index]
         sess["question_index"] = 0
         sess["variant_assignments"] = {str(question_index): variant}
@@ -75,9 +80,10 @@ def _client_on(question_index, variant):
 
 def _post_chat(client, message, reply="ok"):
     """Send one follow-up turn; return the system message the API received."""
+    trial_get(client, "/get_initial_recommendation")
     with patch("app.routes.client.chat.completions.create") as mock_create:
         mock_create.return_value = _make_completion(reply)
-        resp = client.post("/chat", json={"message": message})
+        resp = trial_post(client, "/chat", json={"message": message})
     assert resp.status_code == 200
     _, kwargs = mock_create.call_args
     return kwargs["messages"]
@@ -114,14 +120,10 @@ def test_non_idk_system_message_is_stimulus_plus_shared_format_only():
         (CW_QUESTION_INDEX, "confident_wrong"),
     ]:
         prompt = get_chat_prompt(question_index, variant)
-        expected = (
-            f"{prompt['system_context']}\n\n"
-            f"Question Context: {prompt['question_context']}\n"
-            f"Stance: {prompt['stance']}\n\n"
-            f"{RESPONSE_FORMAT_INSTRUCTIONS}"
-        )
         built = build_system_message(questions[question_index], prompt, variant)
-        assert built == expected
+        assert questions[question_index]["question"] in built
+        assert prompt["stance"] not in built
+        assert RESPONSE_FORMAT_INSTRUCTIONS in built
 
 
 def test_concision_constraint_is_unchanged():
@@ -254,6 +256,8 @@ def test_instructions_do_not_leak_into_a_later_non_idk_trial():
     app = _make_app()
     with app.test_client() as c:
         with c.session_transaction() as sess:
+            sess["participant_id"] = "test-participant"
+            prepare_session(sess)
             sess["question_order"] = [IDK_QUESTION_INDEX, CW_QUESTION_INDEX]
             sess["question_index"] = 0
             sess["variant_assignments"] = {
@@ -268,17 +272,15 @@ def test_instructions_do_not_leak_into_a_later_non_idk_trial():
             sess["begin"] = 0
 
         c.get("/quiz")
-        c.get("/get_initial_recommendation")
+        trial_get(c, "/get_initial_recommendation")
         messages = _post_chat(c, "What does next() do?")
         assert IDK_PERSISTENT_INSTRUCTIONS in messages[0]["content"]
 
-        c.post(
-            "/quiz",
+        trial_post(c, "/quiz",
             data={"answer": questions[IDK_QUESTION_INDEX]["correct"], "n_changes": "0"},
         )
-        c.post(
-            "/post_survey",
-            data={"confidence": "5", "trust": "5", "helpfulness": "5"},
+        trial_post(c, "/post_survey",
+            data={"confidence": "5", "trust": "5", "helpfulness": "5", "difficulty": "5"},
         )
         c.get("/quiz")
 

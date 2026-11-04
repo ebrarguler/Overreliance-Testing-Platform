@@ -1,30 +1,43 @@
 # Libraries
 import os
-import pprint
 import datetime
+import threading
 
 # Imports
 from dotenv import load_dotenv, find_dotenv
 from pymongo import MongoClient
 from urllib.parse import quote_plus
 
+# One client per process. MongoClient is thread-safe and keeps its own
+# connection pool; creating a new one on every call (as before) opened
+# several pools per request and never closed them.
+_client = None
+_client_lock = threading.Lock()
+
 
 # Functions for interacting with MongoDB
 def _get_client():
-    # Load .env variables
-    load_dotenv(find_dotenv())
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                # Load .env variables
+                load_dotenv(find_dotenv())
 
-    # Variables
-    username = os.getenv('MONGODB_UID')
-    cluster = os.getenv('MONGODB_CLUSTER_NAME')
-    authSource = os.getenv('MONGODB_AUTH')
-    password = quote_plus(os.getenv('MONGODB_PWD'))
+                # Variables
+                username = os.getenv('MONGODB_UID')
+                cluster = os.getenv('MONGODB_CLUSTER_NAME')
+                authSource = os.getenv('MONGODB_AUTH')
+                raw_password = os.getenv('MONGODB_PWD')
+                if not all((username, cluster, authSource, raw_password)):
+                    raise RuntimeError('MongoDB connection settings are incomplete')
+                password = quote_plus(raw_password)
 
-    # URI string
-    uri = username + ':' + password + '@' + cluster + authSource
+                # URI string
+                uri = username + ':' + password + '@' + cluster + authSource
 
-    # Initialize MongoDB client
-    return MongoClient(uri)
+                _client = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+    return _client
 
 
 def get_client():
@@ -33,12 +46,17 @@ def get_client():
     return _get_client()
 
 
+def database_name():
+    """MONGODB_DB, default "test". A separate database per study phase
+    (e.g. pilot vs main) keeps their records apart."""
+    return os.getenv('MONGODB_DB', 'test')
+
+
 def get_collection(name):
-    """Return a collection from the `test` database by name (lazy connection,
-    matching init_db()'s behavior — no connection is made at import time)."""
-    # Update later in production environment ---------------------------------- <<<
-    return _get_client().test[name]
-    # ------------------------------------------------------------------------- <<<
+    """Return a collection from the study database by name (lazy
+    connection — no connection is made at import time)."""
+    client = _get_client()
+    return client[database_name()][name]
 
 
 def init_db():
@@ -82,8 +100,14 @@ def insert_user_response(responses):
         "chat_history": responses["chat_history"],
         "chat_transcript": responses.get("chat_transcript"),
         "demographics": responses["demographics"],
-        "timestamp": datetime.datetime.now(),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc),
         "times": responses["times"],
+        # How many trials were answered and rated, out of how many, as
+        # assembled from the per-trial records (app.utils.trial_store).
+        "data_integrity": responses.get("data_integrity"),
+        "n_resumes": responses.get("n_resumes", 0),
+        "runtime": responses.get("runtime", {}),
+        "data_use": responses.get("data_use", "keep"),
     }
     # Design metadata from the persisted assignment (app.utils.assignment).
     # Written only when known, so legacy records are never given a value

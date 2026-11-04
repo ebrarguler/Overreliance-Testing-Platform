@@ -1,3 +1,5 @@
+from tests.helpers import prepare_session, research, trial_get, trial_post, complete_trials
+from app.utils import trial_store
 """
 Tests for site entry links, the first-participation question on the consent
 page, and the browser-cookie repeat check (app/routes.py start/consent/final_survey,
@@ -37,6 +39,7 @@ def client(db):
         template_folder=str(Path(__file__).resolve().parent.parent / "app" / "templates"),
     )
     app.secret_key = "test-secret"
+    app.config["CSRF_ENABLED"] = False
     app.register_blueprint(main_bp)
     return app.test_client()
 
@@ -54,17 +57,19 @@ def _enter(client, site="uzh", prior="no", form=None):
     client.get(f"/start/{site}")
     if site == "uf":
         resp = client.post("/validate_email", data=form or UF_FORM)
-        if not resp.headers["Location"].endswith("/consent"):
+        if resp.status_code != 302 or not resp.headers["Location"].endswith("/consent"):
             return resp
-    return client.post("/consent", data={"consent": "on", "prior_participation": prior})
+    return client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": prior})
 
 
 def _finish(client):
     """Skip straight past the 14 questions, then submit the final survey."""
     with client.session_transaction() as sess:
-        sess["answers"] = []
+        complete_trials(sess)
         sess["question_index"] = len(sess["question_order"])
-    return client.post("/final_survey", data={name: "4" for name in FINAL_SURVEY_FIELDS})
+    response = client.post("/final_survey", data={name: "4" for name in FINAL_SURVEY_FIELDS})
+    client.post("/debrief", data={"choice": "keep"})
+    return response
 
 
 def _new_browser(client):
@@ -99,7 +104,7 @@ def test_site_specific_study_information(client):
 def test_unknown_site_and_bare_root_do_not_start_the_study(client, db):
     assert client.get("/start/elsewhere").status_code == 404
     assert "link you received" in client.get("/").get_data(as_text=True)
-    resp = client.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    resp = client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
     assert resp.headers["Location"].endswith("/")
     assert not db.get("participants") or not db["participants"].docs
 
@@ -132,7 +137,7 @@ def test_declining_stores_nothing(client, db):
 
 def test_prior_participation_answer_is_required(client, db):
     client.get("/start/uzh")
-    resp = client.post("/consent", data={"consent": "on"})
+    resp = client.post("/consent", data={"consent": "on", "adult": "yes"})
     assert resp.status_code == 400
     assert not db.get("participants") or not db["participants"].docs
 
@@ -226,7 +231,7 @@ def test_resubmitting_final_survey_does_not_duplicate_response(client, db):
 def test_back_to_consent_after_agreeing_does_not_create_second_participant(client, db):
     _enter(client)
     assert client.get("/consent").status_code == 302
-    client.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
     assert len(db["participants"].docs) == 1
 
 
@@ -263,7 +268,7 @@ def test_unconsented_session_with_participant_does_not_loop(client, db):
     assert resp.status_code == 200
     assert 'name="prior_participation"' in resp.get_data(as_text=True)
 
-    resp = client.post("/consent", data={"consent": "on", "prior_participation": "no"})
+    resp = client.post("/consent", data={"consent": "on", "adult": "yes", "prior_participation": "no"})
     assert resp.headers["Location"].endswith("/demographics")
     assert client.get("/start/uzh").headers["Location"].endswith("/demographics")
 
@@ -319,7 +324,7 @@ def test_uf_completed_email_is_turned_away_in_any_browser(client, db):
     _new_browser(client)
 
     resp = _enter(client, "uf", form={**UF_FORM, "email": "GATOR@ufl.edu"})
-    assert resp.headers["Location"].endswith("/thank_you")
+    assert resp.status_code == 409
     assert len(db["participants"].docs) == 1
 
 
@@ -330,11 +335,10 @@ def test_uf_unfinished_email_resumes_in_another_browser(client, db):
     _new_browser(client)
 
     resp = _enter(client, "uf", form={**UF_FORM, "email": "gator@ufl.edu "})
-    assert resp.headers["Location"].endswith("/demographics")
+    assert resp.status_code == 409
     with client.session_transaction() as sess:
-        assert (sess["participant_id"], sess["question_order"], sess["sequence_label"]) == first
-        assert sess["prior_participation"] == "started"
-    assert client.get_cookie(PARTICIPANT_COOKIE).value == first[0]
+        assert not sess.get("participant_id")
+    assert client.get_cookie(PARTICIPANT_COOKIE) is None
     assert len(db["participants"].docs) == 1
 
 

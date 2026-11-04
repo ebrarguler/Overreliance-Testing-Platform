@@ -674,3 +674,12 @@ h2 {
 .btn-submit:disabled {
 	background-color: #b8c2c8;
 }
+
+/* Keep the full survey labels readable and selectable on small screens. */
+fieldset.form-group { border: 0; padding: 0; margin: 1.5rem 0; }
+fieldset.form-group legend { font-size: 1rem; margin-bottom: .75rem; }
+fieldset.form-group .likert-option { padding: .5rem; cursor: pointer; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+    fieldset.form-group .likert-scale { grid-template-columns: 1fr; gap: .25rem; text-align: left; }
+    fieldset.form-group .likert-option { flex-direction: row; justify-content: flex-start; }
+}

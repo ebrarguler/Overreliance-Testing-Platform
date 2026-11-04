@@ -5,6 +5,7 @@
     action="{{ url_for('main.collect_demographics') }}"
     class="demographics-form"
   >
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-section">
       <h2>Demographics</h2>
       <div class="basic-info">
@@ -78,6 +79,7 @@
           </div>
         </div>
 
+        {% if session.get("site") == "uf" %}
         <div class="form-field wide">
           <label>Select all that apply:</label>
           <div class="checkbox-grid">
@@ -141,6 +143,7 @@
           </div>
         </div>
 
+        {% endif %}
         <div class="form-field">
           <label>How often do you use AI tools?</label>
           <select name="ai_frequency" required>
