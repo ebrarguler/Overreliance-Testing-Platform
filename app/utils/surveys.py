@@ -24,26 +24,28 @@ FINAL_ITEMS = {
     "own_decisions": "I made my own decisions after consulting this assistant",
     "critical_evaluation": "I evaluated this assistant's reasoning critically",
     "independence": "I maintained independence in my problem-solving",
-    "trust_this_assistant": "I trust this assistant for programming help",
-    "trust_chatgpt": "I trust ChatGPT in general for programming help",
 }
+# The suspicion check: asked before anything that mentions the "I don't
+# know" answers. Older records may also hold items that are no longer asked
+# (scripts/export_data.RETIRED_FINAL_FIELDS). Use of other tools is now seen only through the per-trial
+# tab-hidden and focus-loss counts.
 FINAL_TEXT_ITEMS = {
-    "study_purpose_guess": "What do you think this study was investigating?",
     "assistant_observations": "Did you notice anything unusual about the assistant's answers? Please describe it, or write 'none'.",
 }
 
-# Part 2 of the final survey, shown only after part 1 is complete: these
-# items name the "I don't know" answers, so seeing them first would shape the
-# answers to the study-purpose and unusual-behaviour questions above.
+# Part 2 of the final survey, shown only after part 1 is complete: it names
+# the "I don't know" answers, so seeing it first would shape the answer to
+# the unusual-behaviour question above.
+# The two items share one stem and point in opposite directions (H2b: an
+# abstention shows the assistant can fail; H2a: it makes its confident answers
+# more believable). "Not sure" matches the wordings participants saw
+# (IDK_ABSTENTIONS); none of them says "I don't know".
 FINAL_CHANGE_ITEMS = {
-    "became_more_skeptical": "Over the course of the study, I became more skeptical of this assistant's answers",
-    "trust_increased": "Over the course of the study, my trust in this assistant increased",
-    "idk_changed_use": "When this assistant said it did not know an answer, this changed how I used it afterwards",
-    "idk_more_credible": "Because this assistant sometimes said it did not know, I believed its other answers more",
+    "idk_more_skeptical": "After the assistant said it was not sure about an answer, I became more skeptical of its answers to other questions",
+    "idk_more_trust": "After the assistant said it was not sure about an answer, I trusted its answers to other questions more",
 }
 FINAL_CHANGE_TEXT_ITEMS = {
     "usage_change": "Did the way you used the assistant change during the study? If so, please explain why. If not, write 'no'.",
-    "other_tools": "Did you use any other tools, websites, people, or a code runner during the study? Please describe them, or write 'none'.",
 }
 
 FINAL_LIKERT_ITEMS = {**FINAL_ITEMS, **FINAL_CHANGE_ITEMS}

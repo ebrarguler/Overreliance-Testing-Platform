@@ -137,8 +137,12 @@ PRE_SURVEY_SCALES = {
 
 # Final-survey part 2 (change over the study), exported item by item; not
 # part of any scale. Absent (blank) on records made before these items.
-FINAL_CHANGE_FIELDS = ["became_more_skeptical", "trust_increased", "idk_changed_use",
-                       "idk_more_credible", "usage_change"]
+FINAL_CHANGE_FIELDS = ["idk_more_skeptical", "idk_more_trust", "usage_change"]
+# Final-survey items no longer asked; exported for older records only
+# (blank on new ones).
+RETIRED_FINAL_FIELDS = ["trust_this_assistant", "trust_chatgpt", "study_purpose_guess", "other_tools",
+                        # Asked only by commit 1892c77 (2026-11-05), before the final wording.
+                        "became_more_skeptical", "trust_increased", "idk_changed_use", "idk_more_credible"]
 
 # Final-survey scale definitions.
 # Key   → column prefix in participants.csv  (final_<key>_mean)
@@ -236,8 +240,7 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
         row[field] = json.dumps(value) if isinstance(value, list) else value
     row["n_resumes"] = doc.get("n_resumes", 0)
     row["runtime"] = json.dumps(doc.get("runtime", {}), sort_keys=True)
-    for field in ("trust_this_assistant", "trust_chatgpt", "study_purpose_guess", "assistant_observations", "other_tools",
-                  *FINAL_CHANGE_FIELDS):
+    for field in ("assistant_observations", *FINAL_CHANGE_FIELDS, *RETIRED_FINAL_FIELDS):
         row[field] = final.get(field, "")
 
     for scale, items in PRE_SURVEY_SCALES.items():
@@ -629,8 +632,8 @@ PARTICIPANT_FIELDS = (
     ]
     + [f"pre_{s}_mean" for s in PRE_SURVEY_SCALES]
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
-    + ["total_duration_s", "n_resumes", "runtime", "trust_this_assistant", "trust_chatgpt",
-       "study_purpose_guess", "assistant_observations", "other_tools", *FINAL_CHANGE_FIELDS] + DEMOGRAPHIC_FIELDS
+    + ["total_duration_s", "n_resumes", "runtime",
+       "assistant_observations", *FINAL_CHANGE_FIELDS, *RETIRED_FINAL_FIELDS] + DEMOGRAPHIC_FIELDS
 )
 
 TRIAL_FIELDS = [

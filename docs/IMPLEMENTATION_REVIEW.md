@@ -26,8 +26,8 @@ Fourteen drafted C/W recommendations were shortened to approximately the origina
 
 - Added per-trial perceived difficulty.
 - Trust offers the full numeric 1–7 agreement scale, plus “I didn't need AI assistance” as a separate option stored as `not_needed`. This category describes perceived need, not distrust or lack of exposure, and is excluded from numeric trust scores. Earlier versions offered only numeric 2–7 alongside this category; existing responses are unchanged.
-- Final items explicitly concern this assistant, with separate assistant/ChatGPT trust items and a `not_used` category for ChatGPT.
-- Study-purpose, unusual-behavior, and external-tool questions precede disclosure.
+- Final items explicitly concern this assistant. (Separate assistant/ChatGPT trust items with a `not_used` category for ChatGPT were added here and removed on 2026-11-05.)
+- Study-purpose, unusual-behavior, and external-tool questions precede disclosure. (On 2026-11-05 only the unusual-behavior question was kept.)
 - Debrief explains the scripted recommendations and uncertainty condition, gives correct answers in presentation order, and asks keep/withdraw.
 - Pending and withdrawn new responses are excluded from research exports. Withdrawal is exclusion from analysis, not immediate physical deletion of every stored record or external backup. The retention/deletion policy still needs protocol review.
 - UZH consent now describes pseudonymisation, OpenAI chat transfer, logs, approximately 45 minutes, adulthood and withdrawal. Existing UZH contact text is reused. UZH ethnicity input is removed.
@@ -85,7 +85,7 @@ Still open from the review (need a decision, human work or a live evaluation): p
 - `/` is now the UZH entry page; `/start/uzh` redirects there. UF code and its `/start/uf` link are kept but not in active use.
 - The instructions page and a line on the trial page ask participants not to run the code or use search engines, other AI tools, notes or other people.
 - The scripted recommendation is shown after a random 1.5–3.5 s wait with a "Thinking…" indicator; chat replies show the same indicator. The wait is logged per trial (`recommendation_delay_ms`).
-- The final survey has a second part, shown only after the first part (including the study-purpose and unusual-behaviour questions) is complete: four 1–7 items on change during the study (more skeptical, more trust, "I don't know" changed use, "I don't know" made other answers more believable), the open question on how use changed, and the other-tools question.
+- The final survey was shortened to 21 questions. Part 1: the 17 original statements and "Did you notice anything unusual about the assistant's answers?". Part 2, shown only after part 1 is complete: "After the assistant said it was not sure about an answer, I became more skeptical of its answers to other questions" and "After the assistant said it was not sure about an answer, I trusted its answers to other questions more" (both 1–7), then the open question on how use changed. Removed: the assistant and ChatGPT trust items, the study-purpose question and the other-tools question (outside-tool use is now seen only through tab-hidden/focus-loss counts).
 - UZH demographic records no longer carry an empty `ethnicity` field; age must be at least 18 (matching the consent).
 
 ## Useful commands

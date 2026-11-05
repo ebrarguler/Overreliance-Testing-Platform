@@ -9,5 +9,4 @@
     {% endfor %}
   </div>
   {% if name == 'trust' %}<label for="trust_not_needed"><input type="radio" id="trust_not_needed" name="trust" value="not_needed" {% if request.form.get(name) == "not_needed" %}checked{% endif %} required>I didn't need AI assistance</label>{% endif %}
-  {% if name == 'trust_chatgpt' %}<label><input type="radio" name="{{ name }}" value="not_used" required>I have not used ChatGPT enough to answer</label>{% endif %}
 </fieldset>

@@ -1,13 +1,13 @@
 {% extends "base.html" %}{% block content %}
 <div class="container">
   <h2>Final survey: about this assistant</h2>
-  <p>Unless a statement explicitly mentions ChatGPT, answer about the assistant you just used in this study.</p>
+  <p>Answer about the assistant you just used in this study.</p>
   {% if error %}<p role="alert">{{ error }}</p>{% endif %}
   <form method="POST" class="survey-form" id="final-survey-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {# Part 2 names the "I don't know" answers. It stays hidden until part 1,
-       which includes the study-purpose question, is complete, so it cannot
-       shape those answers. Both parts are sent in one submission. #}
+       which ends with the unusual-behaviour question, is complete, so it
+       cannot shape that answer. Both parts are sent in one submission. #}
     <section id="final-part-1">
       <p class="survey-part">Part 1 of 2</p>
       {% for name, label in final_items.items() %}{% include "_likert_item.html" %}{% endfor %}

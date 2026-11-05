@@ -1038,8 +1038,7 @@ def final_survey():
 
     if request.method == "POST":
         survey_data = {name: request.form.get(name) for name in FINAL_SURVEY_FIELDS}
-        valid = all(value in LIKERT or (name == "trust_chatgpt" and value == "not_used")
-                    for name, value in survey_data.items() if name in FINAL_LIKERT_ITEMS)
+        valid = all(value in LIKERT for name, value in survey_data.items() if name in FINAL_LIKERT_ITEMS)
         valid = valid and all(isinstance(survey_data[name], str) and 0 < len(survey_data[name].strip()) <= 2000
                               for name in FINAL_ALL_TEXT_ITEMS)
         if not valid:

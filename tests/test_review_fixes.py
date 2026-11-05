@@ -420,11 +420,25 @@ def test_final_survey_requires_and_stores_the_change_items(isolated_database):
     answers["usage_change"] = "I checked its answers more after it was wrong."
     assert client.post("/final_survey", data=answers).headers["Location"].endswith("/debrief")
     doc = isolated_database.get_collection("users").find_one({})
-    assert doc["final_survey_answers"]["idk_changed_use"] == "4"
+    assert doc["final_survey_answers"]["idk_more_skeptical"] == "4"
     row = build_participant_row(doc, 1)
     assert set(row) <= set(PARTICIPANT_FIELDS)
     assert row["usage_change"] == "I checked its answers more after it was wrong."
-    assert row["became_more_skeptical"] == "4"
+    assert (row["idk_more_skeptical"], row["idk_more_trust"]) == ("4", "4")
+
+
+def test_final_survey_has_the_reduced_item_set():
+    # 17 original statements + the unusual-behaviour question in part 1;
+    # two closed questions and one open question in part 2.
+    assert len(FINAL_ITEMS) == 17
+    assert list(FINAL_TEXT_ITEMS) == ["assistant_observations"]
+    assert list(FINAL_CHANGE_ITEMS) == ["idk_more_skeptical", "idk_more_trust"]
+    assert list(FINAL_CHANGE_TEXT_ITEMS) == ["usage_change"]
+    for retired in ("trust_this_assistant", "trust_chatgpt", "study_purpose_guess", "other_tools", "idk_changed_use",
+                    "became_more_skeptical", "trust_increased", "idk_more_credible"):
+        assert retired not in FINAL_SURVEY_FIELDS
+    html = _final_page_client().get("/final_survey").get_data(as_text=True)
+    assert "ChatGPT" not in html
 
 
 def test_uzh_demographics_store_no_ethnicity(isolated_database):
