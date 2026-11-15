@@ -286,7 +286,7 @@ def test_reload_after_a_failed_request_offers_the_ai_again(client):
     assert trial_get(client, "/get_initial_recommendation").status_code == 200
 
 
-def test_reload_after_the_ai_keeps_the_own_answer_labelled(client):
+def test_reload_after_the_ai_keeps_the_own_answer_selected_without_a_label(client):
     client.get("/quiz")
     _choose_self_first(client)
     correct = questions[W_Q]["correct"]
@@ -296,7 +296,7 @@ def test_reload_after_the_ai_keeps_the_own_answer_labelled(client):
 
     assert 'let accessStep = "advice";' in html
     assert "let recommendationReceived = true;" in html
-    assert html.count("Your answer before the AI</span>") == 1
+    assert "answer before the AI" not in html
     checked = re.findall(r'<input\s[^>]*name="answer"[^>]*checked[^>]*>', html)
     assert len(checked) == 1
     assert f'value="{escape(correct)}"' in checked[0]

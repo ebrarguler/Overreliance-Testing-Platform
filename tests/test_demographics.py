@@ -12,7 +12,9 @@ import pytest
 from flask import Flask
 
 from app.routes import main_bp
-from app.utils.demographics import GRADE_SCALES, STUDY_LEVEL_OPTIONS
+from app.utils.demographics import (
+    AI_EXPERIENCE_COMMON, AI_EXPERIENCE_OPTIONS, GRADE_SCALES, STUDY_LEVEL_OPTIONS,
+)
 from tests.fake_mongo import FakeDB
 
 UF_FORM = {
@@ -108,3 +110,74 @@ def test_answers_outside_the_site_options_are_rejected(client, form):
     assert resp.status_code == 400
     assert "Please choose your level of study" in resp.get_data(as_text=True)
     assert not _demographics(client)
+
+
+# --- "How long have you been using AI tools?" (options changed 2026-11-15) ----
+
+
+def test_ai_experience_shows_the_new_options(client):
+    _enter(client, "uzh")
+    html = client.get("/demographics").get_data(as_text=True)
+
+    for value, label in AI_EXPERIENCE_OPTIONS.items():
+        assert f'<option value="{value}">{label}</option>' in html
+    for old in ("Less than 6 months", "6-12 months", "2+ years", 'value="expert"'):
+        assert old not in html
+
+
+def test_ai_experience_answer_is_stored(client):
+    _enter(client, "uzh")
+    client.post("/demographics", data={
+        "age": "22", "study_level": "master", "gpa": "5.5-6.0", "ai_experience": "2_3y",
+    })
+    assert _demographics(client)["ai_usage"] == "2_3y"
+
+
+@pytest.mark.parametrize("stored, common", [
+    # new options
+    ("none", "none"), ("lt_1y", "lt_1y"), ("1_2y", "1_2y"), ("2_3y", "2plus"), ("gt_3y", "2plus"),
+    # options before 2026-11-15 (pilot, UF)
+    ("novice", "lt_1y"), ("intermediate", "lt_1y"), ("experienced", "1_2y"), ("expert", "2plus"),
+    (None, ""),
+])
+def test_old_and_new_ai_experience_answers_share_bands_in_the_export(stored, common):
+    from scripts.export_data import PARTICIPANT_FIELDS, build_participant_row
+
+    row = build_participant_row({"demographics": {"ai_usage": stored} if stored else {}}, 1)
+
+    assert row["ai_usage_common"] == common
+    assert "ai_usage_common" in PARTICIPANT_FIELDS
+
+
+def test_every_ai_experience_option_has_a_band():
+    assert set(AI_EXPERIENCE_OPTIONS) <= set(AI_EXPERIENCE_COMMON)
+
+
+# --- wording clarified 2026-11-15 --------------------------------------------------
+
+
+def test_uzh_grade_question_names_the_transcript(client):
+    _enter(client, "uzh")
+    html = client.get("/demographics").get_data(as_text=True)
+
+    assert "Grade average on your most recent Transcript of Records" in html
+    assert "Average grade so far" not in html
+
+
+def test_field_of_study_applies_to_everyone_and_minor_stays_optional(client):
+    _enter(client, "uzh")
+    html = client.get("/demographics").get_data(as_text=True)
+
+    assert '<label for="major">Field of study (your major, or your PhD or other program)</label>' in html
+    assert ">Major<" not in html
+    minor = html[html.index('name="minor"'):]
+    assert "required" not in minor[:minor.index("/>")]
+
+
+def test_phd_without_a_minor_is_stored(client):
+    _enter(client, "uzh")
+    client.post("/demographics", data={
+        "age": "29", "study_level": "phd", "gpa": "none", "major": "Informatics", "minor": "",
+    })
+    stored = _demographics(client)
+    assert (stored["academic_level"], stored["major_category"], stored["minor_category"]) == ("phd", "Informatics", "")

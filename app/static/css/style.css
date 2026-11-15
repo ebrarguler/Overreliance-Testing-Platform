@@ -720,24 +720,28 @@ h2 {
 fieldset.form-group { border: 0; padding: 0; margin: 1.5rem 0; }
 fieldset.form-group legend { font-size: 1rem; margin-bottom: .75rem; }
 fieldset.form-group .likert-option { padding: .5rem; cursor: pointer; overflow-wrap: anywhere; }
-fieldset.form-group .likert-scale-with-not-needed { grid-template-columns: 1.4fr repeat(7, minmax(0, 1fr)); gap: .25rem; }
+/* "I didn't need AI assistance": after the scale, behind a divider, in the
+   same plain style as the other options (not highlighted). */
+fieldset.form-group .likert-scale-with-not-needed { grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(0, 1.2fr); }
 fieldset.form-group .likert-option-not-needed {
-    background-color: #edf5ff;
-    border: 2px solid #8cb6e8;
-    border-radius: 6px;
-    color: #174778;
-    font-weight: 600;
+    margin-left: .5rem;
+    border-left: 1px solid #d5dadf;
 }
-fieldset.form-group .likert-option-not-needed:hover { background-color: #dcecff; }
-fieldset.form-group .likert-option-not-needed:has(input:checked) { background-color: #dcecff; border-color: #2463a5; }
-fieldset.form-group .likert-option-not-needed:focus-within { outline: 2px solid #2463a5; outline-offset: 2px; }
 @media (min-width: 641px) and (max-width: 900px) {
     fieldset.form-group .likert-scale-with-not-needed { grid-template-columns: repeat(7, minmax(0, 1fr)); }
-    fieldset.form-group .likert-option-not-needed { grid-column: 1 / -1; flex-direction: row; justify-content: center; }
+    fieldset.form-group .likert-option-not-needed {
+        grid-column: 1 / -1;
+        flex-direction: row;
+        justify-content: center;
+        margin: .25rem 0 0;
+        border-left: 0;
+        border-top: 1px solid #d5dadf;
+    }
 }
 @media (max-width: 640px) {
     fieldset.form-group .likert-scale { grid-template-columns: 1fr; gap: .25rem; text-align: left; }
     fieldset.form-group .likert-option { flex-direction: row; justify-content: flex-start; }
+    fieldset.form-group .likert-option-not-needed { margin: .25rem 0 0; border-left: 0; border-top: 1px solid #d5dadf; }
 }
 
 /* Reaching the AI's recommendation (question.html, app/utils/ai_access.py).
@@ -788,15 +792,4 @@ fieldset.form-group .likert-option-not-needed:focus-within { outline: 2px solid 
 .access-error {
 	margin: 10px 0 0;
 	color: #c0392b;
-}
-
-.pre-ai-tag {
-	display: inline-block;
-	margin-left: 8px;
-	padding: 1px 8px;
-	border-radius: 10px;
-	background-color: #eef2f5;
-	color: #4a5a68;
-	font-size: 0.8em;
-	vertical-align: middle;
 }

@@ -21,6 +21,30 @@ STUDY_LEVEL_OPTIONS = {
     "other": "Other",
 }
 
+# "How long have you been using AI tools?", stored as ai_usage. New options
+# on 2026-11-15: the old list ended at "2+ years", which almost everyone now
+# picks (ChatGPT was released at the end of 2022), so it no longer told
+# participants apart. Changed bands get new codes, so a stored answer always
+# shows which list it came from. "none" means the same in both lists.
+AI_EXPERIENCE_OPTIONS = {
+    "none": "No prior experience",
+    "lt_1y": "Less than 1 year",
+    "1_2y": "1-2 years",
+    "2_3y": "2-3 years",
+    "gt_3y": "More than 3 years",
+}
+
+# Old and new answers on shared bands (exported as ai_usage_common), so
+# records from both lists, including the pilot and UF, can be compared. Old
+# codes: novice = less than 6 months, intermediate = 6-12 months,
+# experienced = 1-2 years, expert = 2+ years.
+AI_EXPERIENCE_COMMON = {
+    "none": "none",
+    "lt_1y": "lt_1y", "novice": "lt_1y", "intermediate": "lt_1y",
+    "1_2y": "1_2y", "experienced": "1_2y",
+    "2_3y": "2plus", "gt_3y": "2plus", "expert": "2plus",
+}
+
 GRADE_SCALES = {
     # Unchanged from the original UF form (same values and labels).
     "us_gpa_4": {
@@ -36,9 +60,10 @@ GRADE_SCALES = {
             "none": "Prefer not to disclose",
         },
     },
-    # Swiss grades: 6 is best, 4 is a pass.
+    # Swiss grades: 6 is best, 4 is a pass. Label clarified on 2026-11-15
+    # (was "Average grade so far"), which could be read in several ways.
     "ch_6": {
-        "label": "Average grade so far (Swiss scale, 6 = best)",
+        "label": "Grade average on your most recent Transcript of Records (Swiss scale, 6 = best)",
         "placeholder": "Select grade range",
         "options": {
             "5.5-6.0": "5.5 - 6.0",

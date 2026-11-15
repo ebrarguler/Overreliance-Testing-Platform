@@ -102,10 +102,39 @@ def test_surveys_cannot_change_after_trials_begin(client):
     assert _state(client)['demographics'] == before
 
 
-@pytest.mark.parametrize('trust', ['1', '7', 'not_needed'])
-def test_rating_outside_scale_is_rejected(client, trust):
+@pytest.mark.parametrize('field, rating', [
+    ('trust', '1'), ('trust', '7'),
+    ('helpfulness', '1'), ('helpfulness', '7'), ('helpfulness', 'not_needed'),
+])
+def test_rating_outside_scale_is_rejected(client, field, rating):
     _answer(client)
     assert trial_post(client, '/post_survey', data={**RATING, 'confidence': '999'}).status_code == 400
-    assert trial_post(client, '/post_survey', data={**RATING, 'trust': trust}).status_code == 302
+    assert trial_post(client, '/post_survey', data={**RATING, field: rating}).status_code == 302
     pid = _state(client)['participant_id']
-    assert trial_store.trials_for(pid)[0]['rating']['trust'] == trust
+    assert trial_store.trials_for(pid)[0]['rating'][field] == rating
+
+
+def test_trust_no_longer_offers_not_needed(client):
+    # Since 2026-11-15 only helpfulness offers "I didn't need AI assistance".
+    _answer(client)
+    assert trial_post(client, '/post_survey', data={**RATING, 'trust': 'not_needed'}).status_code == 400
+    pid = _state(client)['participant_id']
+    assert trial_store.trials_for(pid)[0]['rating'] is None
+
+
+def test_rating_page_keeps_choices_when_shown_again_after_an_error(client):
+    _answer(client)
+    resp = trial_post(client, '/post_survey', data={**RATING, 'confidence': '999', 'trust': '5'})
+
+    assert resp.status_code == 400
+    html = resp.get_data(as_text=True)
+    assert 'id="trust_5" name="trust" value="5" checked' in html
+
+
+def test_not_needed_is_shown_after_the_scale_on_helpfulness_only(client):
+    _answer(client)
+    html = client.get('/post_survey').get_data(as_text=True)
+
+    assert 'id="trust_not_needed"' not in html
+    assert html.count("I didn't need AI assistance") == 1
+    assert html.index('id="helpfulness_7"') < html.index('id="helpfulness_not_needed"')

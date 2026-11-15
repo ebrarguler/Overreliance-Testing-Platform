@@ -21,7 +21,7 @@ from .utils.chat_safety import filter_idk_reply
 from .utils.security import csrf_token, validate_csrf
 from .utils.surveys import (
     POST_ITEMS, FINAL_ITEMS, FINAL_TEXT_ITEMS, FINAL_CHANGE_ITEMS, FINAL_CHANGE_TEXT_ITEMS,
-    FINAL_LIKERT_ITEMS, FINAL_ALL_TEXT_ITEMS, LIKERT, valid_rating,
+    FINAL_LIKERT_ITEMS, FINAL_ALL_TEXT_ITEMS, LIKERT, NOT_NEEDED_ITEMS, valid_rating,
 )
 from .utils.provenance import runtime_metadata, prompt_hash, option_mentions, stated_option
 from .utils.participants import (
@@ -58,7 +58,7 @@ from .utils.questions import (
     get_initial_recommendation,
     get_chat_prompt,
 )
-from .utils.demographics import GRADE_SCALES, STUDY_LEVEL_OPTIONS
+from .utils.demographics import AI_EXPERIENCE_OPTIONS, GRADE_SCALES, STUDY_LEVEL_OPTIONS
 from .utils.pre_survey import (
     PRE_SURVEY_PAGES,
     page_field_names,
@@ -233,7 +233,8 @@ def _restore_progress():
 @main_bp.context_processor
 def study_context():
     site = get_site(session.get("site")) or get_site("uzh")
-    return {"csrf_token": csrf_token, "research_note": site["research_note"], "withdrawal_deadline": debrief_store.deadline()}
+    return {"csrf_token": csrf_token, "research_note": site["research_note"], "withdrawal_deadline": debrief_store.deadline(),
+            "not_needed_items": NOT_NEEDED_ITEMS}
 
 
 main_bp.before_request(validate_csrf)
@@ -433,6 +434,7 @@ def _render_demographics(site, error=None):
     return render_template(
         "demographics.html",
         study_levels=STUDY_LEVEL_OPTIONS,
+        ai_experience_options=AI_EXPERIENCE_OPTIONS,
         grade_scale=GRADE_SCALES[site["grade_scale"]],
         error=error,
     )

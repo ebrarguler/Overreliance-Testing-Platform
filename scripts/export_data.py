@@ -17,7 +17,7 @@ participants.csv  — one row per participant
     Columns: participant_id, site, prior_participation, participated_before,
              sequence_design_version, design_group, sequence,
              type_at_position, rotation_seed, rotation_scheme, timestamp,
-             three pre-survey scale means and the 10 pre-survey answers
+             three pre-survey scale means and the pre-survey answers
              (plus the five retired 25-question scale means, older records
              only), four final-survey scale means,
              total_duration_s
@@ -87,6 +87,7 @@ from app.utils.db import init_db
 from app.utils import db as database
 from app.utils import trial_store  # noqa: E402
 from app.utils.pre_survey import all_likert_names  # noqa: E402
+from app.utils.demographics import AI_EXPERIENCE_COMMON  # noqa: E402
 
 PQ_DESIGN = "blocks_pq_v1"
 LEGACY_DESIGN_GROUP = "legacy_unversioned"
@@ -100,11 +101,13 @@ LEGACY_DESIGN_GROUP = "legacy_unversioned"
 # Value → list of item names as stored in pre_survey_answers in MongoDB.
 # Computed over these items for every record, so older records (which also
 # hold the removed questions) are averaged over the same questions as new
-# ones. need_for_cognition was the 5-item mean before 2026-11-15; the old
-# version is need_for_cognition_5item below.
+# ones. Exception: program_without_ai is new (it replaced the differently
+# worded independent_programming), so for older records programming_skill
+# is the mean of the other two. need_for_cognition was the 5-item mean
+# before 2026-11-15; the old version is need_for_cognition_5item below.
 PRE_SURVEY_SCALES = {
     "programming_skill": [
-        "independent_programming",
+        "program_without_ai",
         "code_comprehension",
         "language_proficiency",
     ],
@@ -121,8 +124,11 @@ PRE_SURVEY_SCALES = {
 }
 # Every rating question currently asked is also exported on its own as
 # pre_<name> (for reliability, e.g. Cronbach's alpha). self_solving belongs
-# to no scale and is used on its own.
-PRE_SURVEY_ITEMS = all_likert_names()
+# to no scale and is used on its own, as is hesitant_without_checking.
+# independent_programming and blind_trust (the old wordings of
+# program_without_ai and hesitant_without_checking) are exported for older
+# records; never pool a new column with its old one.
+PRE_SURVEY_ITEMS = all_likert_names() + ["independent_programming", "blind_trust"]
 
 # Scales of the 25-question version (before 2026-11-15), for older records
 # only. Each is computed only when every one of its items was answered, so a
@@ -266,6 +272,9 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
     for field in DEMOGRAPHIC_FIELDS:
         value = (doc.get("demographics") or {}).get(field, "")
         row[field] = json.dumps(value) if isinstance(value, list) else value
+    # ai_usage holds old (until 2026-11-15) or new answer codes; this puts
+    # both on the same bands (app/utils/demographics.AI_EXPERIENCE_COMMON).
+    row["ai_usage_common"] = AI_EXPERIENCE_COMMON.get(row["ai_usage"], "")
     row["n_resumes"] = doc.get("n_resumes", 0)
     row["runtime"] = json.dumps(doc.get("runtime", {}), sort_keys=True)
     for field in ("assistant_observations", *FINAL_CHANGE_FIELDS, *RETIRED_FINAL_FIELDS):
@@ -731,6 +740,7 @@ PARTICIPANT_FIELDS = (
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
     + ["total_duration_s", "n_resumes", "runtime",
        "assistant_observations", *FINAL_CHANGE_FIELDS, *RETIRED_FINAL_FIELDS] + DEMOGRAPHIC_FIELDS
+    + ["ai_usage_common"]
 )
 
 TRIAL_FIELDS = [

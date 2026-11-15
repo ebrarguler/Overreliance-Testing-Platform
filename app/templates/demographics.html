@@ -57,23 +57,27 @@
         </div>
 
         <div class="form-row">
+          {# Worded to apply to everyone, including PhD students and
+             "Other" (was "Major"); still stored as major_category. #}
           <div class="form-field">
-            <label>Major</label>
+            <label for="major">Field of study (your major, or your PhD or other program)</label>
             <input
               type="text"
+              id="major"
               name="major"
               required
-              placeholder="Enter your major"
+              placeholder="e.g. Informatics"
               style="max-width: 93%"
             />
           </div>
 
           <div class="form-field">
-            <label>Minor (if applicable)</label>
+            <label for="minor">Minor (if applicable)</label>
             <input
               type="text"
+              id="minor"
               name="minor"
-              placeholder="Enter your minor (optional)"
+              placeholder="Leave empty if none"
               style="max-width: 93%"
             />
           </div>
@@ -162,11 +166,9 @@
           <label>How long have you been using AI tools?</label>
           <select name="ai_experience" required>
             <option value="">Select experience</option>
-            <option value="none">No prior experience</option>
-            <option value="novice">Less than 6 months</option>
-            <option value="intermediate">6-12 months</option>
-            <option value="experienced">1-2 years</option>
-            <option value="expert">2+ years</option>
+            {% for value, label in ai_experience_options.items() %}
+            <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
           </select>
         </div>
 

@@ -52,7 +52,15 @@ FINAL_LIKERT_ITEMS = {**FINAL_ITEMS, **FINAL_CHANGE_ITEMS}
 FINAL_ALL_TEXT_ITEMS = {**FINAL_TEXT_ITEMS, **FINAL_CHANGE_TEXT_ITEMS}
 
 
+# Rating questions that also offer "I didn't need AI assistance", stored as
+# "not_needed" and left out of numeric means. Since 2026-11-15 only
+# helpfulness: every participant sees the recommendation, so everyone can
+# say how much they trusted it, and a trust opt-out dropped exactly the
+# confident participants' ratings. Older records may hold trust=not_needed.
+NOT_NEEDED_ITEMS = {"helpfulness"}
+
+
 def valid_rating(name, value):
-    if name in {"trust", "helpfulness"}:
+    if name in NOT_NEEDED_ITEMS:
         return value in LIKERT | {"not_needed"}
     return value in LIKERT

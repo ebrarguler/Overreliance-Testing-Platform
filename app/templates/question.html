@@ -33,7 +33,6 @@
           disabled
         />
         <label for="option-{{ loop.index }}">{{ option }}</label>
-        {% if is_pre_ai %}<span class="pre-ai-tag">Your answer before the AI</span>{% endif %}
       </div>
       {% endfor %}
 
@@ -213,18 +212,12 @@
     document.getElementById("save-and-see-ai").disabled = selectedAnswer() === null;
   }
 
-  // Label the saved answer and keep it selected once the AI has answered.
+  // Keep the saved answer selected once the AI has answered. Deliberately
+  // not labelled: a "your answer" tag beside it would make switching feel
+  // like backing down and hint at the before/after comparison.
   function markPreAiAnswer(value) {
     answerInputs().forEach((input) => {
-      if (input.value !== value) return;
-      input.checked = true;
-      const option = input.closest(".option");
-      if (option && !option.querySelector(".pre-ai-tag")) {
-        const tag = document.createElement("span");
-        tag.className = "pre-ai-tag";
-        tag.textContent = "Your answer before the AI";
-        option.appendChild(tag);
-      }
+      if (input.value === value) input.checked = true;
     });
     // answer_revisions counts changes after the recommendation: the saved
     // answer is where they start.

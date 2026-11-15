@@ -4,53 +4,29 @@
     <h2>Pre-Survey</h2>
     <p class="survey-progress">{% if total_pages > 1 %}Page {{ page }} of {{ total_pages }} &mdash; {% endif %}{{ page_config.title }}</p>
 
+    {# Same rating layout as the post-trial and final surveys
+       (_likert_item.html), which becomes a vertical list on phones. The old
+       layout here cut off "Agree" and "Strongly agree" on narrow screens. #}
     <form method="POST" action="{{ url_for('main.pre_survey', page=page) }}" class="survey-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-group">
-            <div class="likert-group">
-                {% for section in page_config.sections %}
-                {% for name, text in section %}
-                <hr size="1" class="hrline" color="f1f1f1">
-                <p>{{ text }}</p>
-                <div>
-                    <div class="likert-scale">
-                        {% for i in range(1, 8) %}
-                        <div class="likert-option">
-                            <input type="radio" id="{{ name }}_{{ i }}" name="{{ name }}" value="{{ i }}" required
-                                {% if answers.get(name) == i|string %}checked{% endif %}>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    <div class="likert-scale">
-                        <div>Strongly<br/>Disagree</div>
-                        <div>Disagree</div>
-                        <div>Somewhat<br/>Disagree</div>
-                        <div>Neutral</div>
-                        <div>Somewhat<br/>Agree</div>
-                        <div>Agree</div>
-                        <div>Strongly<br/>Agree</div>
-                    </div>
-                </div>
-                {% endfor %}
-                {% endfor %}
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% set prefill = answers %}
+        {% for section in page_config.sections %}
+        {% for name, label in section %}{% include "_likert_item.html" %}{% endfor %}
+        {% endfor %}
 
-                {% if page_config.free_text %}
-                <hr size="1" class="hrline" color="f1f1f1">
-                <div>
-                    <label for="{{ page_config.free_text.name }}">{{ page_config.free_text.label }}</label>
-                    <textarea
-                        id="{{ page_config.free_text.name }}"
-                        name="{{ page_config.free_text.name }}"
-                        rows="4"
-                        placeholder="Enter here"
-                        style="width: 98%; max-width: 98%;"
-                    >{{ answers.get(page_config.free_text.name) or '' }}</textarea>
-                </div>
-                {% endif %}
-            </div>
+        {% if page_config.free_text %}
+        <div>
+            <label for="{{ page_config.free_text.name }}">{{ page_config.free_text.label }}</label>
+            <textarea
+                id="{{ page_config.free_text.name }}"
+                name="{{ page_config.free_text.name }}"
+                rows="4"
+                placeholder="Enter here"
+                style="width: 98%; max-width: 98%;"
+            >{{ answers.get(page_config.free_text.name) or '' }}</textarea>
         </div>
+        {% endif %}
 
-        <hr size="1" class="hrline" color="f1f1f1">
         <div class="survey-nav">
             {% if page > 1 %}
             <a href="{{ url_for('main.pre_survey', page=page - 1) }}" class="survey-btn survey-btn-secondary">Back</a>
