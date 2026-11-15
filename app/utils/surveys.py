@@ -53,6 +53,6 @@ FINAL_ALL_TEXT_ITEMS = {**FINAL_TEXT_ITEMS, **FINAL_CHANGE_TEXT_ITEMS}
 
 
 def valid_rating(name, value):
-    if name == "trust":
+    if name in {"trust", "helpfulness"}:
         return value in LIKERT | {"not_needed"}
     return value in LIKERT
