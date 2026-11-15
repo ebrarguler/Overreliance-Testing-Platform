@@ -198,11 +198,16 @@ def history_for(participant_id, question_index=None):
     return history
 
 
+def _trial_starts():
+    coll = db.get_collection("trial_starts")
+    _ensure_index(coll, [("participant_id", 1), ("position", 1)], name="start_unique", unique=True)
+    return coll
+
+
 def start_trial(participant_id, position):
     from datetime import datetime, timezone
     _surveys().update_one({"participant_id": participant_id}, {"$set": {"locked": True}}, upsert=True)
-    coll = db.get_collection("trial_starts")
-    _ensure_index(coll, [("participant_id", 1), ("position", 1)], name="start_unique", unique=True)
+    coll = _trial_starts()
     query = {"participant_id": participant_id, "position": position}
     try:
         coll.update_one(query, {"$setOnInsert": {
@@ -211,6 +216,58 @@ def start_trial(participant_id, position):
     except DuplicateKeyError:
         pass
     return coll.find_one(query)
+
+
+# --- how the AI's recommendation was reached (see app/utils/ai_access.py) -------
+#
+# Stored on the trial_starts document of the position, next to started_at /
+# served_at, each field written once:
+#   path                      "self_first" or "ai_first", the first button used
+#   path_chosen_at            ISO time of that click (server)
+#   pre_ai_locked_at          ISO time the own answer was saved (or given up)
+#   pre_ai_answer             the saved option, None if given up
+#   pre_ai_abandoned          True if "I'm not sure" was used instead
+#   pre_ai_unsaved_selection  option selected but not saved when giving up
+#   pre_ai_n_changes          selection changes before saving
+
+ACCESS_FIELDS = (
+    "path", "path_chosen_at", "pre_ai_locked_at", "pre_ai_answer",
+    "pre_ai_abandoned", "pre_ai_unsaved_selection", "pre_ai_n_changes",
+)
+
+
+def trial_access(participant_id, position):
+    doc = _trial_starts().find_one({"participant_id": participant_id, "position": position}) or {}
+    return {field: doc.get(field) for field in ACCESS_FIELDS}
+
+
+def choose_path(participant_id, position, path, chosen_at):
+    """
+    Record the first path chosen on this position. A later call (a second
+    tab, a double click, the AI button after "Answer on my own first")
+    changes nothing. Returns the stored access fields.
+    """
+    start_trial(participant_id, position)
+    _trial_starts().update_one(
+        {"participant_id": participant_id, "position": position, "path": {"$exists": False}},
+        {"$set": {"path": path, "path_chosen_at": chosen_at}},
+    )
+    return trial_access(participant_id, position)
+
+
+def lock_pre_ai(participant_id, position, fields):
+    """
+    Store the answer given before the AI's recommendation, once, and only on
+    the self_first path. Called before the recommendation is returned.
+    Returns the stored access fields (the first saved answer if two
+    requests raced).
+    """
+    _trial_starts().update_one(
+        {"participant_id": participant_id, "position": position,
+         "path": "self_first", "pre_ai_locked_at": {"$exists": False}},
+        {"$set": {key: fields.get(key) for key in ACCESS_FIELDS if key.startswith("pre_ai_")}},
+    )
+    return trial_access(participant_id, position)
 
 
 def has_started(participant_id):

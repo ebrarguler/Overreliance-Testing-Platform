@@ -303,6 +303,7 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
         chat = record.get("chat") or {}
         clipboard = record.get("clipboard") or {}
         visibility = record.get("visibility") or {}
+        pre_ai = record.get("pre_ai") or {}
         runtime = _trial_runtime(record)
 
         rows.append({
@@ -381,6 +382,24 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "answer_option_place": record.get("answer_option_place", ""),
             "correct_option_place": record.get("correct_option_place", ""),
             "target_wrong_option_place": record.get("target_wrong_option_place", ""),
+
+            # How the recommendation was reached and the answer saved before
+            # it (docs/MEASURES.md section 4.5). Blank on records from before
+            # the two buttons (2026-11-15).
+            "ai_access_path": record.get("ai_access_path") or "",
+            "self_first_button_left": record.get("self_first_button_left", ""),
+            "path_chosen_at": timestamps.get("path_chosen_at") or "",
+            "pre_ai_locked_at": timestamps.get("pre_ai_locked_at") or "",
+            "path_choice_s": pre_ai.get("path_choice_s"),
+            "own_attempt_s": pre_ai.get("own_attempt_s"),
+            "pre_ai_answer": pre_ai.get("answer"),
+            "pre_ai_answer_place": pre_ai.get("answer_place"),
+            "pre_ai_is_correct": pre_ai.get("is_correct"),
+            "pre_ai_agreed_with_ai": pre_ai.get("agreed_with_ai"),
+            "pre_ai_switched_after_ai": pre_ai.get("switched_after_ai"),
+            "pre_ai_switched_to_ai": pre_ai.get("switched_to_ai"),
+            "pre_ai_n_changes": pre_ai.get("n_changes"),
+            "pre_ai_unsaved_selection": pre_ai.get("unsaved_selection"),
         })
 
     return rows
@@ -575,6 +594,50 @@ def compute_aggregates(all_trial_rows: list[dict]) -> dict:
             }
         aggregates["option6_primary_probes"] = by_context
 
+    # §8.10 — how the recommendation was reached. Present only when trials
+    # carry a path. Participants choose the path themselves, so these
+    # describe behaviour; they are not effects of answering first.
+    with_path = [r for r in all_trial_rows if r.get("ai_access_path")]
+    if with_path:
+        own_first = ("self_first", "self_first_abandoned")
+        saved_first = [r for r in with_path if r["ai_access_path"] == "self_first"]
+        by_type_access = {}
+        for t in ("correct", "confident_wrong", "idk"):
+            rows = [r for r in with_path if r["trial_type"] == t]
+            own = [r for r in rows if r["ai_access_path"] in own_first]
+            saved = [r for r in saved_first if r["trial_type"] == t]
+            # switch_to_ai is defined only where the own answer differed
+            # from the AI's endorsed answer (none on IDK trials).
+            disagreed = [r for r in saved if r.get("pre_ai_switched_to_ai") is not None]
+            by_type_access[t] = {
+                "n_trials": len(rows),
+                "own_first_rate": named_rate(rows, lambda r: r["ai_access_path"] in own_first),
+                "abandoned_rate": named_rate(own, lambda r: r["ai_access_path"] == "self_first_abandoned"),
+                "pre_ai_accuracy": named_rate(saved, lambda r: r.get("pre_ai_is_correct") is True),
+                "switch_after_ai_rate": named_rate(saved, lambda r: r.get("pre_ai_switched_after_ai") is True),
+                "switch_to_ai_rate": named_rate(disagreed, lambda r: r.get("pre_ai_switched_to_ai") is True),
+            }
+        aggregates["ai_access"] = {
+            "by_trial_type": by_type_access,
+            # Schemmer et al. (2023), pooled over self_first trials. RAIR:
+            # own answer wrong, AI correct (correct trials) -> final correct.
+            # RSR: own answer correct, AI wrong (confident_wrong trials) ->
+            # final still correct.
+            "relative_ai_reliance": named_rate(
+                [r for r in saved_first if r["trial_type"] == "correct" and r.get("pre_ai_is_correct") is False],
+                lambda r: r["is_correct"] is True,
+            ),
+            "relative_self_reliance": named_rate(
+                [r for r in saved_first if r["trial_type"] == "confident_wrong" and r.get("pre_ai_is_correct") is True],
+                lambda r: r["is_correct"] is True,
+            ),
+            "note": (
+                "Exploratory. The path is self-selected, so compare paths only as "
+                "behaviour, not as an effect of answering first; see docs/MEASURES.md "
+                "sections 4.5 and 8.10."
+            ),
+        }
+
     return aggregates
 
 
@@ -686,6 +749,10 @@ TRIAL_FIELDS = [
     "rotation_scheme", "protocol_version", "study_phase",
     "n_late_turns", "n_messages_sent", "n_hidden", "hidden_s", "n_blur",
     "recommendation_delay_ms",
+    "ai_access_path", "self_first_button_left", "path_chosen_at", "pre_ai_locked_at",
+    "path_choice_s", "own_attempt_s",
+    "pre_ai_answer", "pre_ai_answer_place", "pre_ai_is_correct", "pre_ai_agreed_with_ai",
+    "pre_ai_switched_after_ai", "pre_ai_switched_to_ai", "pre_ai_n_changes", "pre_ai_unsaved_selection",
 ]
 
 CHAT_FIELDS = [

@@ -41,6 +41,7 @@ from .utils.participants import (
 from .utils.sites import DEFAULT_SITE, get_site
 from .utils.assignment import get_or_create_assignment, get_assignment
 from .utils.trial_types import is_misleading
+from .utils import ai_access
 from .utils.chat_prompting import build_system_message
 from .utils.measures import (
     get_ai_endorsed_answer,
@@ -241,12 +242,13 @@ main_bp.before_request(validate_csrf)
 @main_bp.before_request
 def protect_progress():
     endpoint = request.endpoint or ""
-    protected = {"main.quiz", "main.chat", "main.initial_recommendation", "main.post_survey",
-                 "main.final_survey", "main.pre_survey", "main.collect_demographics", "main.instructions"}
+    ajax_endpoints = {"main.chat", "main.initial_recommendation", "main.choose_path"}
+    protected = {"main.quiz", "main.post_survey", "main.final_survey", "main.pre_survey",
+                 "main.collect_demographics", "main.instructions"} | ajax_endpoints
     if endpoint not in protected:
         return
     if not session.get("participant_id"):
-        if endpoint in {"main.chat", "main.initial_recommendation"}:
+        if endpoint in ajax_endpoints:
             return jsonify({"error": "No active participant"}), 400
         return redirect(url_for("main.index"))
     participant = get_participant(session["participant_id"])
@@ -257,8 +259,8 @@ def protect_progress():
         for key in ("answers", "times", "post_survey_answers", "chat_history", "chat_transcript", "final_survey_answers"):
             session.pop(key, None)
     _restore_progress()
-    ajax = endpoint in {"main.chat", "main.initial_recommendation"}
-    if endpoint in {"main.quiz", "main.chat", "main.initial_recommendation", "main.instructions"}:
+    ajax = endpoint in ajax_endpoints
+    if endpoint in {"main.quiz", "main.instructions"} | ajax_endpoints:
         if not session.get("consented") or not session.get("demographics") or first_incomplete_page(session.get("pre_survey_data") or {}) is not None:
             if ajax:
                 return jsonify({"error": "Please complete the earlier study pages first."}), 409
@@ -280,7 +282,7 @@ def prevent_stale_pages(response):
     response.headers["Referrer-Policy"] = "same-origin"
     # AJAX reads the assignment and cursor but never writes a stale session
     # snapshot back over a simultaneous answer/rating request.
-    if request.endpoint in {"main.chat", "main.initial_recommendation"}:
+    if request.endpoint in {"main.chat", "main.initial_recommendation", "main.choose_path"}:
         session.modified = False
     return response
 
@@ -568,6 +570,25 @@ def quiz():
 
             n_changes = _form_count("n_changes")
             initial_answer = request.form.get("initial_answer") or final_answer
+            first_submit_at = request.form.get("first_submit_at") or None
+
+            # Which button was used first, and the answer saved before the
+            # recommendation (read from the server, never from the form).
+            access = trial_store.trial_access(session["participant_id"], position_0idx)
+            pre_ai_fields = ai_access.compute_pre_ai_fields(
+                access,
+                served_at=session.get("trial_served_at"),
+                final_answer=final_answer,
+                correct_answer=question["correct"],
+                ai_endorsed_answer=ai_endorsed_answer,
+                options=_displayed_options(current_q_index),
+            )
+            if pre_ai_fields["pre_ai"]["answer"] is not None:
+                # On the self_first path the saved answer is the one standing
+                # when the recommendation appeared; answer_revisions then
+                # counts changes made after the recommendation only.
+                initial_answer = pre_ai_fields["pre_ai"]["answer"]
+                first_submit_at = access["pre_ai_locked_at"]
 
             confidence_rating = None
             if trial_confidence_rating_enabled():
@@ -613,15 +634,18 @@ def quiz():
 
                 "timestamps": {
                     "served_at": session.get("trial_served_at"),
-                    # Answer options stay locked until the initial
-                    # recommendation is requested, so that request is the
-                    # first interaction. Its server timestamp covers a page
+                    # Answer options stay locked until one of the two path
+                    # buttons is pressed, so that click is the first
+                    # interaction. Its server timestamp covers a page
                     # reload, which clears the client-side value.
                     "first_interaction_at": (
                         request.form.get("first_interaction_at")
+                        or access["path_chosen_at"]
                         or (_initial_recommendation_entry(current_q_index) or {}).get("timestamp")
                     ),
-                    "first_submit_at": request.form.get("first_submit_at") or None,
+                    "path_chosen_at": access["path_chosen_at"],
+                    "pre_ai_locked_at": access["pre_ai_locked_at"],
+                    "first_submit_at": first_submit_at,
                     "final_submit_at": final_submit_at,
                 },
                 "dwell_time_s": session["elapsed_time"],
@@ -633,6 +657,12 @@ def quiz():
                 "idk_phrasing_id": (
                     _initial_recommendation_entry(current_q_index) or {}
                 ).get("idk_phrasing_id"),
+
+                # "self_first", "self_first_abandoned" or "ai_first", the
+                # answer saved before the recommendation and whether it was
+                # changed afterwards. See app/utils/ai_access.py.
+                **pre_ai_fields,
+                "self_first_button_left": ai_access.self_first_button_on_left(session["participant_id"]),
 
                 "answer_revisions": {
                     "initial_answer": initial_answer,
@@ -683,6 +713,23 @@ def quiz():
     # everything after the most recent Divider (empty on a fresh trial).
     current_trial_history = trial_store.history_for(session["participant_id"], current_q_index)
 
+    recommendation_shown = _initial_recommendation_entry(current_q_index) is not None
+    access = trial_store.trial_access(session["participant_id"], session["question_index"])
+    # The step the page opens on, so a reload returns to the same place:
+    #   choose   two buttons, options locked
+    #   own      "Answer on my own first" pressed, answer not saved yet
+    #   pending  path chosen (and own answer saved) but the recommendation
+    #            request did not complete: one button to request it again
+    #   advice   recommendation shown, options and chat unlocked
+    if recommendation_shown:
+        access_step = "advice"
+    elif access["path"] == ai_access.SELF_FIRST and not access["pre_ai_locked_at"]:
+        access_step = "own"
+    elif access["path"]:
+        access_step = "pending"
+    else:
+        access_step = "choose"
+
     return render_template(
         "question.html",
         question=question,
@@ -690,12 +737,69 @@ def quiz():
         question_number=session["question_index"] + 1,
         total_questions=len(session["question_order"]),
         chat_history=current_trial_history,
-        recommendation_shown=_initial_recommendation_entry(current_q_index) is not None,
+        recommendation_shown=recommendation_shown,
+        access_step=access_step,
+        path_buttons=ai_access.path_buttons(session["participant_id"]),
+        pre_ai_answer=access["pre_ai_answer"],
         enable_confidence_rating=trial_confidence_rating_enabled(),
     )
 
 
-@main_bp.route("/get_initial_recommendation", methods=["GET"])
+def _request_params():
+    """JSON body of a POST, else the query string / form values."""
+    if request.is_json:
+        body = request.get_json(silent=True)
+        return body if isinstance(body, dict) else {}
+    return request.values
+
+
+def _count_param(value):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+@main_bp.route("/choose_path", methods=["POST"])
+def choose_path():
+    """
+    "Answer on my own first" was pressed. Stored on the server so a reload
+    returns to the same step and the path cannot be chosen again. The other
+    button ("See the AI's recommendation first") goes straight to
+    /get_initial_recommendation, which records "ai_first".
+    """
+    if "question_order" not in session:
+        return jsonify({"error": "No active question"}), 400
+    if not _trial_in_progress():
+        return jsonify({"error": "No active question"}), 409
+    if _request_params().get("path") != ai_access.SELF_FIRST:
+        return jsonify({"error": "Unknown choice"}), 400
+
+    current_q_index = session["question_order"][session["question_index"]]
+    if _initial_recommendation_entry(current_q_index) is not None:
+        # A stale page: the recommendation is already shown.
+        return jsonify({"error": "This page is out of date. Reload to continue."}), 409
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    access = trial_store.choose_path(
+        session["participant_id"], session["question_index"], ai_access.SELF_FIRST, now
+    )
+    return jsonify({"path": access["path"]})
+
+
+def _recommendation_payload(text, access):
+    """
+    The recommendation text, plus the participant's own saved answer on the
+    self_first path (the page labels it). Nothing else: the trial type must
+    never reach the browser.
+    """
+    payload = {"recommendation": text}
+    if access.get("pre_ai_answer") is not None:
+        payload["pre_ai_answer"] = access["pre_ai_answer"]
+    return payload
+
+
+@main_bp.route("/get_initial_recommendation", methods=["GET", "POST"])
 def initial_recommendation():
     if "question_order" not in session:
         return jsonify({"error": "No active question"}), 400
@@ -703,12 +807,37 @@ def initial_recommendation():
         return jsonify({"error": "No active question"}), 409
 
     current_q_index = session["question_order"][session["question_index"]]
+    participant_id = session["participant_id"]
+    position = session["question_index"]
 
     # Already shown this trial (e.g. the page was reloaded): return the same
     # text again without logging a second exposure.
     shown = _initial_recommendation_entry(current_q_index)
     if shown is not None:
-        return jsonify({"recommendation": shown["assistant_message"]})
+        access = trial_store.trial_access(participant_id, position)
+        return jsonify(_recommendation_payload(shown["assistant_message"], access))
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # No path chosen yet means "See the AI's recommendation first" (or a page
+    # from before the two buttons). After "Answer on my own first" this
+    # changes nothing.
+    access = trial_store.choose_path(participant_id, position, ai_access.AI_FIRST, now)
+    if access["path"] == ai_access.SELF_FIRST and not access["pre_ai_locked_at"]:
+        # Save the participant's own answer BEFORE the recommendation text
+        # is sent, so it is provably given without the advice.
+        params = _request_params()
+        abandoned = params.get("abandoned") in (True, "true", "1")
+        answer = params.get("pre_ai_answer")
+        options = questions[current_q_index]["options"]
+        if not abandoned and answer not in options:
+            return jsonify({"error": "Choose an answer first, or say you are not sure."}), 400
+        access = trial_store.lock_pre_ai(participant_id, position, {
+            "pre_ai_locked_at": now,
+            "pre_ai_answer": None if abandoned else answer,
+            "pre_ai_abandoned": abandoned,
+            "pre_ai_unsaved_selection": answer if abandoned and answer in options else None,
+            "pre_ai_n_changes": _count_param(params.get("pre_ai_n_changes")),
+        })
 
     variant = session["variant_assignments"][str(current_q_index)]
     idk_phrasing = _current_idk_phrasing()
@@ -727,7 +856,7 @@ def initial_recommendation():
         "is_initial_recommendation": True,
         "is_error": False,
         "shown_to_participant": True,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "timestamp": now,
         "user_message": user_message,
         "assistant_message": recommendation["recommendation"],
         # Which IDK_ABSTENTIONS wording was shown; None on other trial types.
@@ -738,7 +867,7 @@ def initial_recommendation():
         "reasoning_tokens": None,
     })
 
-    return jsonify({"recommendation": entry["assistant_message"]})
+    return jsonify(_recommendation_payload(entry["assistant_message"], access))
 
 
 @main_bp.route("/chat", methods=["POST"])

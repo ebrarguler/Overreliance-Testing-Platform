@@ -21,6 +21,7 @@ The bare address `/` is the UZH entry page (`/start/uzh` redirects there). UF ke
 - P/Q orders in blocks of 5/5/4, balanced separately at each site.
 - Seeded uniform question randomization: all 14 questions appear once, randomly assigned to the fixed P/Q positions (8 correct, 3 wrong, 3 IDK), without difficulty labels. Existing participant assignments are preserved.
 - Answer options are shown in a per-participant random order (from the same seed); option places are recorded.
+- Each trial starts with two equal buttons, "Answer on my own first" or "See the AI's recommendation first". An own answer is saved on the server before the recommendation appears; every answer is submitted only after the recommendation. See `docs/MEASURES.md` §4.5.
 - Initial recommendations are scripted. Correct/wrong follow-up prompts use a natural assistant with the code and options; IDK prompts maintain abstention and apply conservative output checks.
 - Answers, ratings, chat turns, timers, and surveys are saved incrementally in MongoDB. Session loss restores progress from those records.
 - CSRF tokens, trial-position checks, first-write-wins answers/ratings, and server-side completion checks protect the flow.
@@ -34,6 +35,7 @@ The bare address `/` is the UZH entry page (`/start/uzh` redirects there). UF ke
 | Location | Responsibility |
 |---|---|
 | `app/routes.py` | Participant flow and request validation |
+| `app/utils/ai_access.py` | The optional own-answer-first path and its per-trial measures |
 | `app/utils/trial_store.py` | Durable trial, chat, survey storage and recovery |
 | `app/utils/assignment.py`, `sequences.py` | Persisted allocation and uniform question randomization |
 | `app/utils/questions.py`, `chat_prompting.py`, `chat_safety.py` | Stimuli, model prompts, IDK checks |

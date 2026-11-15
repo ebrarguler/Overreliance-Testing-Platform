@@ -22,15 +22,18 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="position" value="{{ question_number - 1 }}" />
       {% for option in options %}
+      {% set is_pre_ai = pre_ai_answer is not none and option == pre_ai_answer %}
       <div class="option">
         <input
           type="radio"
           name="answer"
           value="{{ option }}"
           id="option-{{ loop.index }}"
+          {% if is_pre_ai %}checked{% endif %}
           disabled
         />
         <label for="option-{{ loop.index }}">{{ option }}</label>
+        {% if is_pre_ai %}<span class="pre-ai-tag">Your answer before the AI</span>{% endif %}
       </div>
       {% endfor %}
 
@@ -70,10 +73,42 @@
 
   <hr />
 
-  <div class="center" style="margin-block: 20px">
-    <button class="btn" id="get-recommendation">
-      Get Initial Recommendation
-    </button>
+  {# How the participant reaches the AI's recommendation: see
+     app/utils/ai_access.py. Only the panel of the current step is shown. #}
+  <div class="ai-access" id="ai-access">
+    <div class="access-step" id="step-choose" hidden>
+      <p class="access-prompt">How would you like to start?</p>
+      <div class="path-buttons">
+        {% for path, label in path_buttons %}
+        <button type="button" class="btn btn-path" id="choose-{{ path | replace('_', '-') }}">{{ label }}</button>
+        {% endfor %}
+      </div>
+      <p class="access-note">
+        Either way, you will see the AI's recommendation before you submit
+        your final answer.
+      </p>
+    </div>
+
+    <div class="access-step" id="step-own" hidden>
+      <p class="access-prompt">
+        Choose your answer above, then save it to see the AI's recommendation.
+        You can still change your answer after that.
+      </p>
+      <button type="button" class="btn" id="save-and-see-ai" disabled>
+        Save my answer and see the AI's recommendation
+      </button>
+      <p class="access-note">
+        <button type="button" class="link-button" id="skip-to-ai">
+          I'm not sure – show me the AI's recommendation
+        </button>
+      </p>
+    </div>
+
+    <div class="access-step" id="step-pending" hidden>
+      <button type="button" class="btn" id="see-ai">See the AI's recommendation</button>
+    </div>
+
+    <p class="access-error" id="access-error" role="alert" hidden></p>
   </div>
 
   <div class="chat-section">
@@ -131,9 +166,77 @@
   // starts unlocked instead of asking for it again.
   let recommendationReceived = {{ 'true' if recommendation_shown else 'false' }};
 
+  // --- Reaching the AI's recommendation (app/utils/ai_access.py) -------------
+  // choose  -> two buttons, options locked
+  // own     -> "Answer on my own first": options unlocked, save to see the AI
+  // pending -> path chosen, recommendation not yet received: request it again
+  // advice  -> recommendation shown: options and chat unlocked
+  // The server decides the step on load, so a reload returns to it.
+  let accessStep = {{ access_step | tojson }};
+  // Saved before the recommendation (self_first path), else null.
+  let preAiAnswer = {{ pre_ai_answer | tojson }};
+  let preAiSelected = false;
+  let preAiChanges = 0;
+  // Parameters of a recommendation request that failed, sent again by the
+  // "See the AI's recommendation" button so a saved answer is not lost.
+  let retryParams = {};
+
+  function answerInputs() {
+    return document.querySelectorAll('input[name="answer"]');
+  }
+
+  function selectedAnswer() {
+    const checked = document.querySelector('input[name="answer"]:checked');
+    return checked ? checked.value : null;
+  }
+
+  function showAccessStep(step) {
+    accessStep = step;
+    for (const name of ["choose", "own", "pending"]) {
+      document.getElementById(`step-${name}`).hidden = step !== name;
+    }
+    if (step === "own") {
+      answerInputs().forEach((input) => (input.disabled = false));
+      updateSaveState();
+    } else if (step !== "advice") {
+      answerInputs().forEach((input) => (input.disabled = true));
+    }
+  }
+
+  function showAccessError(message) {
+    const box = document.getElementById("access-error");
+    box.textContent = message || "";
+    box.hidden = !message;
+  }
+
+  function updateSaveState() {
+    document.getElementById("save-and-see-ai").disabled = selectedAnswer() === null;
+  }
+
+  // Label the saved answer and keep it selected once the AI has answered.
+  function markPreAiAnswer(value) {
+    answerInputs().forEach((input) => {
+      if (input.value !== value) return;
+      input.checked = true;
+      const option = input.closest(".option");
+      if (option && !option.querySelector(".pre-ai-tag")) {
+        const tag = document.createElement("span");
+        tag.className = "pre-ai-tag";
+        tag.textContent = "Your answer before the AI";
+        option.appendChild(tag);
+      }
+    });
+    // answer_revisions counts changes after the recommendation: the saved
+    // answer is where they start.
+    initialAnswer = value;
+    firstSubmitAt = new Date().toISOString();
+    document.getElementById("initial_answer").value = value;
+    document.getElementById("first_submit_at").value = firstSubmitAt;
+  }
+
   function unlockAfterRecommendation() {
     recommendationReceived = true;
-    document.getElementById("get-recommendation").disabled = true;
+    showAccessStep("advice");
     document.getElementById("user-message").disabled = false;
     document.getElementById("send-message").disabled = false;
 
@@ -182,6 +285,17 @@
 
   document.querySelectorAll('input[name="answer"]').forEach((input) => {
     input.addEventListener("change", (e) => {
+      if (accessStep === "own") {
+        // Before the AI: counted separately (pre_ai.n_changes).
+        markFirstInteraction();
+        if (preAiSelected) {
+          preAiChanges += 1;
+        } else {
+          preAiSelected = true;
+        }
+        updateSaveState();
+        return;
+      }
       trackAnswerChange(e.target.value);
       updateSubmitState();
     });
@@ -246,7 +360,12 @@
   // Render any Markdown carried over from earlier turns, then scroll.
   window.onload = () => {
     renderRestoredHistory();
-    if (recommendationReceived) unlockAfterRecommendation();
+    if (recommendationReceived) {
+      unlockAfterRecommendation();
+      if (preAiAnswer !== null) markPreAiAnswer(preAiAnswer);
+    } else {
+      showAccessStep(accessStep);
+    }
     updateSubmitState();
     scrollToBottom();
   };
@@ -398,48 +517,135 @@
   const RECOMMENDATION_DELAY_MIN_MS = 1500;
   const RECOMMENDATION_DELAY_MAX_MS = 3500;
   let recommendationPending = false;
+  let questionBubbleShown = false;
+  const CSRF_HEADERS = {
+    "Content-Type": "application/json",
+    "X-CSRF-Token": {{ csrf_token() | tojson }},
+  };
 
-  document
-    .getElementById("get-recommendation")
-    .addEventListener("click", async () => {
-      const button = document.getElementById("get-recommendation");
-      if (recommendationReceived || recommendationPending) return;
-      recommendationPending = true;
-      button.disabled = true;
-      markFirstInteraction();
-      let indicator = null;
+  function setAccessButtonsDisabled(disabled) {
+    document
+      .querySelectorAll("#ai-access button")
+      .forEach((button) => (button.disabled = disabled));
+    if (!disabled && accessStep === "own") updateSaveState();
+  }
 
-      try {
+  // "Answer on my own first": stored on the server, then unlock the options.
+  async function chooseSelfFirst() {
+    if (recommendationPending) return;
+    markFirstInteraction();
+    showAccessError("");
+    setAccessButtonsDisabled(true);
+    try {
+      const response = await fetch("/choose_path", {
+        method: "POST",
+        headers: CSRF_HEADERS,
+        body: JSON.stringify({ position, path: "self_first" }),
+      });
+      if (response.status === 409) { window.location.reload(); return; }
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Choice not saved");
+      // Another tab already asked the AI first: show the page as stored.
+      if (data.path !== "self_first") { window.location.reload(); return; }
+      setAccessButtonsDisabled(false);
+      showAccessStep("own");
+    } catch (error) {
+      console.error("Error:", error);
+      setAccessButtonsDisabled(false);
+      showAccessError("That didn't go through. Please try again.");
+    }
+  }
+
+  // Ask for the recommendation. On the self_first path `params` carries the
+  // saved answer (or abandoned: true); the server stores it before replying.
+  async function requestRecommendation(params) {
+    if (recommendationReceived || recommendationPending) return;
+    recommendationPending = true;
+    markFirstInteraction();
+    showAccessError("");
+    // The answer is frozen from here on; the panel buttons too.
+    answerInputs().forEach((input) => (input.disabled = true));
+    setAccessButtonsDisabled(true);
+    let indicator = null;
+
+    try {
+      if (!questionBubbleShown) {
+        questionBubbleShown = true;
         await addMessageWithTyping(
           "What's your recommended answer to this question?",
           true
         );
+      }
 
-        const delay = RECOMMENDATION_DELAY_MIN_MS
-          + Math.random() * (RECOMMENDATION_DELAY_MAX_MS - RECOMMENDATION_DELAY_MIN_MS);
-        const requestedAt = Date.now();
-        indicator = showThinking();
-        const response = await fetch(`/get_initial_recommendation?position=${position}`, {headers: {"X-CSRF-Token": {{ csrf_token() | tojson }}}});
-        if (response.status === 409) { window.location.reload(); return; }
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Recommendation unavailable");
-        await sleep(Math.max(0, delay - (Date.now() - requestedAt)));
+      const delay = RECOMMENDATION_DELAY_MIN_MS
+        + Math.random() * (RECOMMENDATION_DELAY_MAX_MS - RECOMMENDATION_DELAY_MIN_MS);
+      const requestedAt = Date.now();
+      indicator = showThinking();
+      const response = await fetch("/get_initial_recommendation", {
+        method: "POST",
+        headers: CSRF_HEADERS,
+        body: JSON.stringify({ position, ...params }),
+      });
+      if (response.status === 409) { window.location.reload(); return; }
+      const data = await response.json();
+      if (response.status === 400 && accessStep === "own") {
+        // No valid answer saved: back to choosing one.
         indicator.remove();
         indicator = null;
-        document.getElementById("recommendation_delay_ms").value = String(Math.round(Date.now() - requestedAt));
-        await addMessageWithTyping(data.recommendation, false);
-
-        unlockAfterRecommendation();
-        document.getElementById("user-message").focus();
-      } catch (error) {
-        console.error("Error:", error);
-        if (indicator) indicator.remove();
-        button.disabled = false;
-        button.textContent = "Try initial recommendation again";
-      } finally {
-        recommendationPending = false;
+        setAccessButtonsDisabled(false);
+        showAccessStep("own");
+        showAccessError(data.error || "Choose an answer first.");
+        return;
       }
+      if (!response.ok) throw new Error(data.error || "Recommendation unavailable");
+      await sleep(Math.max(0, delay - (Date.now() - requestedAt)));
+      indicator.remove();
+      indicator = null;
+      document.getElementById("recommendation_delay_ms").value = String(Math.round(Date.now() - requestedAt));
+      await addMessageWithTyping(data.recommendation, false);
+
+      unlockAfterRecommendation();
+      preAiAnswer = data.pre_ai_answer ?? null;
+      if (preAiAnswer !== null) {
+        markPreAiAnswer(preAiAnswer);
+      } else {
+        // "I'm not sure" (or AI first): no answer carried over.
+        answerInputs().forEach((input) => (input.checked = false));
+      }
+      updateSubmitState();
+      document.getElementById("user-message").focus();
+    } catch (error) {
+      console.error("Error:", error);
+      if (indicator) indicator.remove();
+      // Keep what was sent, so the retry saves the same answer.
+      retryParams = params;
+      setAccessButtonsDisabled(false);
+      showAccessStep("pending");
+      showAccessError("The recommendation didn't load. Please try again.");
+    } finally {
+      recommendationPending = false;
+    }
+  }
+
+  document.getElementById("choose-self-first").addEventListener("click", chooseSelfFirst);
+  document
+    .getElementById("choose-ai-first")
+    .addEventListener("click", () => requestRecommendation({}));
+  document.getElementById("save-and-see-ai").addEventListener("click", () => {
+    const answer = selectedAnswer();
+    if (answer === null) return;
+    requestRecommendation({ pre_ai_answer: answer, pre_ai_n_changes: preAiChanges });
+  });
+  document.getElementById("skip-to-ai").addEventListener("click", () => {
+    requestRecommendation({
+      abandoned: true,
+      pre_ai_answer: selectedAnswer(),
+      pre_ai_n_changes: preAiChanges,
     });
+  });
+  document
+    .getElementById("see-ai")
+    .addEventListener("click", () => requestRecommendation(retryParams));
 
   // A send is in flight. Guards re-entry from both the Send button and Enter,
   // and gates the Send button while the assistant is replying. The text input
