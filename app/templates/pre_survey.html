@@ -2,7 +2,7 @@
 {% block content %}
 <div class="container">
     <h2>Pre-Survey</h2>
-    <p class="survey-progress">Page {{ page }} of {{ total_pages }} &mdash; {{ page_config.title }}</p>
+    <p class="survey-progress">{% if total_pages > 1 %}Page {{ page }} of {{ total_pages }} &mdash; {% endif %}{{ page_config.title }}</p>
 
     <form method="POST" action="{{ url_for('main.pre_survey', page=page) }}" class="survey-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

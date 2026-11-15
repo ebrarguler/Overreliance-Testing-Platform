@@ -17,7 +17,9 @@ participants.csv  — one row per participant
     Columns: participant_id, site, prior_participation, participated_before,
              sequence_design_version, design_group, sequence,
              type_at_position, rotation_seed, rotation_scheme, timestamp,
-             six pre-survey scale means, four final-survey scale means,
+             three pre-survey scale means and the 10 pre-survey answers
+             (plus the five retired 25-question scale means, older records
+             only), four final-survey scale means,
              total_duration_s
 
 trials.csv        — one row per participant × trial (long format)
@@ -84,6 +86,7 @@ load_dotenv(find_dotenv())
 from app.utils.db import init_db
 from app.utils import db as database
 from app.utils import trial_store  # noqa: E402
+from app.utils.pre_survey import all_likert_names  # noqa: E402
 
 PQ_DESIGN = "blocks_pq_v1"
 LEGACY_DESIGN_GROUP = "legacy_unversioned"
@@ -92,19 +95,43 @@ LEGACY_DESIGN_GROUP = "legacy_unversioned"
 # Config — edit here to change scale composition.
 # ---------------------------------------------------------------------------
 
-# Pre-survey scale definitions.
+# Pre-survey scale definitions (the 10-question version, 2026-11-15).
 # Key   → column prefix in participants.csv  (pre_<key>_mean)
 # Value → list of item names as stored in pre_survey_answers in MongoDB.
+# Computed over these items for every record, so older records (which also
+# hold the removed questions) are averaged over the same questions as new
+# ones. need_for_cognition was the 5-item mean before 2026-11-15; the old
+# version is need_for_cognition_5item below.
 PRE_SURVEY_SCALES = {
-    "programming_self_efficacy": [
+    "programming_skill": [
         "independent_programming",
-        "learn_languages",
-        "identify_improvements",
+        "code_comprehension",
+        "language_proficiency",
+    ],
+    "need_for_cognition": [
+        "code_understanding",
+        "concept_understanding",
+        "complex_problems",
     ],
     "ai_trust": [
         "ai_dependability",
         "ai_reliability",
         "ai_explanation",
+    ],
+}
+# Every rating question currently asked is also exported on its own as
+# pre_<name> (for reliability, e.g. Cronbach's alpha). self_solving belongs
+# to no scale and is used on its own.
+PRE_SURVEY_ITEMS = all_likert_names()
+
+# Scales of the 25-question version (before 2026-11-15), for older records
+# only. Each is computed only when every one of its items was answered, so a
+# new record, which still holds some of these items, leaves them blank.
+RETIRED_PRE_SURVEY_SCALES = {
+    "programming_self_efficacy": [
+        "independent_programming",
+        "learn_languages",
+        "identify_improvements",
     ],
     "ai_concerns": [
         "ai_dependency",
@@ -112,7 +139,7 @@ PRE_SURVEY_SCALES = {
         "blind_trust",
         "learning_hindrance",
     ],
-    "need_for_cognition": [
+    "need_for_cognition_5item": [
         "code_understanding",
         "solution_exploration",
         "concept_understanding",
@@ -180,12 +207,13 @@ FINAL_SURVEY_SCALES = {
 # ---------------------------------------------------------------------------
 
 
-def scale_mean(responses: dict, items: list) -> float | None:
+def scale_mean(responses: dict, items: list, require_all: bool = False) -> float | None:
     """
     Compute the mean of the numeric values for the listed item keys.
 
     Silently skips items that are absent, None, or non-numeric (e.g. free-text).
-    Returns None when no valid values are found.
+    Returns None when no valid values are found, or, with require_all, when
+    any listed item has no valid value.
     """
     values = []
     for key in items:
@@ -196,7 +224,7 @@ def scale_mean(responses: dict, items: list) -> float | None:
             values.append(8 - value if key in {"questioned_recommendations", "verified_answers"} else value)
         except (KeyError, TypeError, ValueError):
             pass
-    if not values:
+    if not values or (require_all and len(values) < len(items)):
         return None
     return round(sum(values) / len(values), 4)
 
@@ -245,6 +273,10 @@ def build_participant_row(doc: dict, participant_id: int) -> dict:
 
     for scale, items in PRE_SURVEY_SCALES.items():
         row[f"pre_{scale}_mean"] = scale_mean(pre, items)
+    for item in PRE_SURVEY_ITEMS:
+        row[f"pre_{item}"] = pre.get(item, "")
+    for scale, items in RETIRED_PRE_SURVEY_SCALES.items():
+        row[f"pre_{scale}_mean"] = scale_mean(pre, items, require_all=True)
 
     for scale, items in FINAL_SURVEY_SCALES.items():
         row[f"final_{scale}_mean"] = scale_mean(final, items)
@@ -694,6 +726,8 @@ PARTICIPANT_FIELDS = (
         "sequence", "type_at_position", "rotation_seed", "rotation_scheme", "timestamp",
     ]
     + [f"pre_{s}_mean" for s in PRE_SURVEY_SCALES]
+    + [f"pre_{item}" for item in PRE_SURVEY_ITEMS]
+    + [f"pre_{s}_mean" for s in RETIRED_PRE_SURVEY_SCALES]
     + [f"final_{s}_mean" for s in FINAL_SURVEY_SCALES]
     + ["total_duration_s", "n_resumes", "runtime",
        "assistant_observations", *FINAL_CHANGE_FIELDS, *RETIRED_FINAL_FIELDS] + DEMOGRAPHIC_FIELDS

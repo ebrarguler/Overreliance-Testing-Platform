@@ -7,66 +7,40 @@ Answers from all pages are merged into one flat dict, so the stored document
 shape is the same as when the survey was a single page.
 """
 
+# Reduced on 2026-11-15 from 25 rating questions and one free-text question
+# on three pages to these 10 on one page. Names and wording are unchanged
+# from the UF study, so the kept questions stay comparable with its data.
+# Removed: learn_languages, identify_improvements, solution_exploration,
+# the four "concerns" items, fundamental_concepts, data_structures,
+# oop_principles, explain_concepts, the four AI-literacy items and the
+# free-text ai_classroom_concerns (see docs/MEASURES.md). The "concerns" items
+# and ai_risks told participants, just before the task, that the AI might be
+# wrong; the others repeated kept questions or the demographics page.
 PRE_SURVEY_PAGES = [
     {
-        "title": "About You as a Programmer",
+        "title": "About You and AI Assistants",
         "sections": [
-            # Programming Self-Efficacy
+            # Programming skill / confidence
             [
                 ("independent_programming", "I am confident in my ability to program independently"),
-                ("learn_languages", "I can learn new programming languages independently"),
-                ("identify_improvements", "I can identify when my code needs improvement"),
+                ("code_comprehension", "I can read and comprehend code written by others"),
+                ("language_proficiency", "I am proficient in programming in one or more programming languages"),
             ],
-            # Need for Cognition
+            # Need for cognition (programming-specific, adapted; not the
+            # validated NCS) and, as a single question, the preference to
+            # solve before asking for help (the self-report twin of the
+            # "Answer on my own first" button).
             [
                 ("code_understanding", "I enjoy understanding how code works rather than just getting it to work"),
-                ("solution_exploration", "I like exploring different solutions to programming problems"),
                 ("concept_understanding", "I seek to understand the underlying concepts when learning programming"),
-                ("self_solving", "I prefer figuring out solutions before asking for help"),
                 ("complex_problems", "I enjoy the process of solving complex problems"),
+                ("self_solving", "I prefer figuring out solutions before asking for help"),
             ],
-        ],
-    },
-    {
-        "title": "Your Views on AI Assistants",
-        "sections": [
-            # General Trust in AI
+            # Trust in AI (mirrored by the final survey's trust_in_chatbot items)
             [
                 ("ai_dependability", "When working with an AI assistant while programming, I feel I can depend on the AI assistant"),
                 ("ai_reliability", "I can rely on AI for effective assistance with coding tasks"),
                 ("ai_explanation", "I feel I can count on AI to explain programming concepts clearly"),
-            ],
-            # Concerns for Trust
-            [
-                ("ai_dependency", "I worry about becoming too dependent on AI"),
-                ("incorrect_advice", "I am concerned that AI might give me incorrect advice"),
-                ("blind_trust", "I feel uncertain about blindly trusting AI's suggestions"),
-                ("learning_hindrance", "I worry that using AI might hinder my learning"),
-            ],
-        ],
-        "free_text": {
-            "name": "ai_classroom_concerns",
-            "label": "If any, do you have concerns about the use of AI assistants in classrooms? Please list out below.",
-        },
-    },
-    {
-        "title": "Programming and AI Literacy",
-        "sections": [
-            # Programming Literacy
-            [
-                ("fundamental_concepts", "I understand fundamental programming concepts (variables, loops, functions)"),
-                ("code_comprehension", "I can read and comprehend code written by others"),
-                ("data_structures", "I can identify and use appropriate data structures"),
-                ("oop_principles", "I understand object-oriented programming principles"),
-                ("explain_concepts", "I can explain programming concepts to others"),
-                ("language_proficiency", "I am proficient in programming in one or more programming languages"),
-            ],
-            # AI Literacy
-            [
-                ("ai_principles", "I understand the basic principles of how AI systems work"),
-                ("ai_use_cases", "I can identify appropriate use cases for AI in programming"),
-                ("ai_risks", "I understand the risks and biases of AI assistants"),
-                ("ai_prompting", "I can effectively prompt AI tools to get desired results"),
             ],
         ],
     },
@@ -75,6 +49,11 @@ PRE_SURVEY_PAGES = [
 
 def page_likert_names(page):
     return [name for section in page["sections"] for name, _ in section]
+
+
+def all_likert_names():
+    """Every rating question currently asked, in page order."""
+    return [name for page in PRE_SURVEY_PAGES for name in page_likert_names(page)]
 
 
 def page_field_names(page):
