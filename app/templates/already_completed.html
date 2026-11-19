@@ -1,10 +1,14 @@
-{% extends "base.html" %} {% block content %}
-<div class="container">
-	<h2>Study Already Completed</h2>
-	<p class="center">
-		This study has already been completed in this browser. Each person can
-		take part only once. Thank you for your participation.
-	</p>
+{% extends "base.html" %}{% block content %}
+<div class="end-page end-final">
+  <header class="end-hero">
+    <div class="end-hero-icon is-info" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11v6M12 7.5v.01"/></svg>
+    </div>
+    <h2>You’ve already completed this study</h2>
+    <p>This study has already been completed in this browser. Each person can take part only once. Thank you for taking part!</p>
+  </header>
+  <div class="end-actions">
+    <a href="{{ url_for('main.completion' if is_uzh else 'main.debrief') }}" class="end-btn end-btn-primary">See the study explanation and your results</a>
+  </div>
 </div>
-<p><a href="{{ url_for('main.debrief') }}">Review the study explanation and data-use choice</a></p>
 {% endblock %}

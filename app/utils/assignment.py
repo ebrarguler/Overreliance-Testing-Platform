@@ -5,7 +5,8 @@ Two concerns live here, both backed by MongoDB so they're safe across
 concurrent requests and multiple gunicorn worker processes (an
 in-process lock would not help — each worker has its own memory):
 
-1. Least-filled order assignment, per site. New participants are assigned
+1. UZH uses its single fixed UZH_SEQUENCE with no P/Q counter claim.
+   Other sites retain least-filled order assignment, per site. New participants are assigned
    to one of the active orders (sequences.SEQUENCE_LABELS, currently P/Q)
    by claiming whichever has the fewest assignments so far at their site,
    choosing at random when they are tied. Balancing within each site keeps
@@ -54,6 +55,7 @@ from .sequences import (
     OPTION_ORDER_SCHEME,
     build_trial_sequence,
     build_option_orders,
+    UZH_DESIGN_VERSION, UZH_SEQUENCE_LABEL, UZH_SEQUENCE,
 )
 
 # Tie-breaking randomness. Module-level so tests can substitute a seeded one.
@@ -197,22 +199,25 @@ def get_or_create_assignment(participant_id, questions, site):
     if existing is not None:
         return _record_to_result(existing)
 
-    label = _claim_least_filled_label(site)
-    seq_index = SEQUENCE_LABELS.index(label)
+    is_uzh = site == "uzh"
+    label = UZH_SEQUENCE_LABEL if is_uzh else _claim_least_filled_label(site)
+    seq_index = 0 if is_uzh else SEQUENCE_LABELS.index(label)
+    sequence = UZH_SEQUENCE if is_uzh else SEQUENCES[seq_index]
     try:
         question_order, variant_assignments, seq_label, seed = build_trial_sequence(
-            seq_index, questions
+            seq_index, questions, sequence=sequence, label=label
         )
     except Exception:
-        _release_label(site, label)
+        if not is_uzh:
+            _release_label(site, label)
         raise
 
     record = {
         "participant_id": participant_id,
         "site": site,
-        "sequence_design_version": SEQUENCE_DESIGN_VERSION,
+        "sequence_design_version": UZH_DESIGN_VERSION if is_uzh else SEQUENCE_DESIGN_VERSION,
         "sequence_label": seq_label,
-        "type_at_position": list(SEQUENCES[seq_index]),
+        "type_at_position": list(sequence),
         "problem_at_position": question_order,
         "variant_assignments": variant_assignments,
         "seed": seed,
@@ -230,7 +235,8 @@ def get_or_create_assignment(participant_id, questions, site):
         # participant; the winner's assignment is authoritative. Give back
         # the slot this request claimed so the counts stay equal to the
         # number of assignments actually made.
-        _release_label(site, label)
+        if not is_uzh:
+            _release_label(site, label)
         existing = coll.find_one({"participant_id": participant_id})
         return _record_to_result(existing)
 

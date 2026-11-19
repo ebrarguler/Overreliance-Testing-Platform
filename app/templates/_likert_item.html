@@ -7,13 +7,17 @@
   {# The answer to show as selected: a re-shown form's value, else one saved
      earlier (`prefill`, set by the pre-survey, e.g. after a resume). #}
   {% set current = request.form.get(name) or ((prefill or {}).get(name) if prefill is defined else none) %}
-  <div class="likert-scale{% if allows_not_needed %} likert-scale-with-not-needed{% endif %}">
+  <div class="likert-scale{% if allows_not_needed and not is_uzh %} likert-scale-with-not-needed{% endif %}">
     {% for i in range(1, 8) %}
     <label class="likert-option" for="{{ name }}_{{ i }}">
       <input type="radio" id="{{ name }}_{{ i }}" name="{{ name }}" value="{{ i }}" {% if current == i|string %}checked{% endif %} required>
       {{ ['Strongly disagree', 'Disagree', 'Somewhat disagree', 'Neutral', 'Somewhat agree', 'Agree', 'Strongly agree'][i-1] }}
     </label>
     {% endfor %}
+    {% if allows_not_needed and is_uzh %}
+  </div>
+  <div class="helpfulness-alternative">
+    {% endif %}
     {% if allows_not_needed %}
     <label class="likert-option likert-option-not-needed" for="{{ name }}_not_needed">
       <input type="radio" id="{{ name }}_not_needed" name="{{ name }}" value="not_needed" {% if current == "not_needed" %}checked{% endif %} required>

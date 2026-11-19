@@ -7,10 +7,13 @@ mapping: which concrete question fills each "C"/"W"/"I" slot is rotated per
 participant (seeded), so a given question is not always shown at the same
 position, decoupling question identity from position.
 
-Active design: blocks with a mirrored first block
+Retained UF / historical UZH design: blocks with a mirrored first block
 (PQ_DESIGN_VERSION = "blocks_pq_v1"
 SEQUENCE_DESIGN_VERSION = PQ_DESIGN_VERSION)
 -------------------------------------------------------------------
+New UZH assignments instead use UZH_SEQUENCE (uzh_fixed14_v1):
+C C C W | I C C C C I | C C C W. The table below remains for UF.
+
 Two orders, 14 positions in three blocks of 5, 5 and 4. Every block holds
 exactly one W and one IDK; the rest are C. Positions are numbered 1-14 in
 the comments and constants below; the lists are 0-indexed.
@@ -59,6 +62,12 @@ I = TrialType.IDK.value
 # ---------------------------------------------------------------------------
 
 PQ_DESIGN_VERSION = "blocks_pq_v1"
+# UZH only. The P/Q table remains available for UF and historical records.
+UZH_DESIGN_VERSION = "uzh_fixed14_v1"
+UZH_SEQUENCE_LABEL = "UZH14"
+UZH_SEQUENCE = [C, C, C, W, I, C, C, C, C, I, C, C, C, W]
+UZH_WRONG_PROBE_POSITIONS = (4, 14)
+UZH_SECTION_BOUNDARIES = [(0, 4), (4, 10), (10, 14)]
 SEQUENCE_DESIGN_VERSION = PQ_DESIGN_VERSION
 
 SEQUENCES = [
@@ -358,7 +367,7 @@ def validate_pool_sufficiency(questions):
     mid-session.
     """
     shortfalls = []
-    for label, seq in zip(SEQUENCE_LABELS, SEQUENCES):
+    for label, seq in [*zip(SEQUENCE_LABELS, SEQUENCES), (UZH_SEQUENCE_LABEL, UZH_SEQUENCE)]:
         try:
             _assign_problems(label, seq, questions, rng=None)
         except ValueError as exc:
@@ -386,7 +395,7 @@ def validate_pool_sufficiency(questions):
 # ---------------------------------------------------------------------------
 
 
-def build_trial_sequence(seq_index, questions, seed=None):
+def build_trial_sequence(seq_index, questions, seed=None, *, sequence=None, label=None):
     """
     Build one participant's realized trial sequence: which question fills
     each position, and which trial type it's shown under.
@@ -426,8 +435,8 @@ def build_trial_sequence(seq_index, questions, seed=None):
         should catch this at startup instead — this is a defense-in-depth
         check, not the primary guard.
     """
-    sequence = SEQUENCES[seq_index]
-    seq_label = SEQUENCE_LABELS[seq_index]
+    sequence = SEQUENCES[seq_index] if sequence is None else sequence
+    seq_label = SEQUENCE_LABELS[seq_index] if label is None else label
 
     if ROTATE_PROBLEMS:
         if seed is None:

@@ -25,7 +25,8 @@ SITES = {
     "uzh": {
         "name": "University of Zurich",
         "consent_template": "consent.html",
-        # UZH collects no personal data: no email, name or student ID.
+        # UZH collects no name or student ID. The only email is an optional
+        # prize-draw entry, stored apart from research data (app.utils.prize_draw).
         "start_template": "index.html",
         "collects_identity": False,
         # Swiss 1-6 grades (app.utils.demographics.GRADE_SCALES).

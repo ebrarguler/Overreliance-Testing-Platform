@@ -30,7 +30,7 @@ def db():
         yield fake
 
 
-def _active_counts(db, site="uzh"):
+def _active_counts(db, site="uf"):
     coll = db.get("sequence_counts")
     return {
         d["label"]: d["count"]
@@ -39,7 +39,7 @@ def _active_counts(db, site="uzh"):
     }
 
 
-def _assign(n, prefix="p", site="uzh"):
+def _assign(n, prefix="p", site="uf"):
     return [get_or_create_assignment(f"{prefix}{i}", questions, site) for i in range(n)]
 
 
@@ -47,11 +47,11 @@ def _assign(n, prefix="p", site="uzh"):
 
 
 def test_new_assignment_persists_design_metadata(db):
-    result = get_or_create_assignment("p1", questions, "uzh")
+    result = get_or_create_assignment("p1", questions, "uf")
     (record,) = db["participant_assignments"].docs
 
     assert record["sequence_design_version"] == SEQUENCE_DESIGN_VERSION == "blocks_pq_v1"
-    assert record["site"] == "uzh"
+    assert record["site"] == "uf"
     assert record["sequence_label"] in SEQUENCE_LABELS
     seq_index = SEQUENCE_LABELS.index(record["sequence_label"])
     assert record["type_at_position"] == SEQUENCES[seq_index]
@@ -69,7 +69,7 @@ def test_new_assignment_persists_design_metadata(db):
 
 
 def test_persisted_seed_reproduces_the_question_mapping(db):
-    get_or_create_assignment("p1", questions, "uzh")
+    get_or_create_assignment("p1", questions, "uf")
     (record,) = db["participant_assignments"].docs
     seq_index = SEQUENCE_LABELS.index(record["sequence_label"])
     order, variants, _, _ = build_trial_sequence(seq_index, questions, seed=record["seed"])
@@ -78,15 +78,15 @@ def test_persisted_seed_reproduces_the_question_mapping(db):
 
 
 def test_repeat_request_returns_same_assignment_and_uses_no_slot(db):
-    first = get_or_create_assignment("p1", questions, "uzh")
+    first = get_or_create_assignment("p1", questions, "uf")
     for _ in range(5):
-        assert get_or_create_assignment("p1", questions, "uzh") == first
+        assert get_or_create_assignment("p1", questions, "uf") == first
     assert sum(_active_counts(db).values()) == 1
     assert len(db["participant_assignments"].docs) == 1
 
 
 def test_existing_difficulty_balanced_assignment_is_preserved(db, monkeypatch):
-    get_or_create_assignment("p1", questions, "uzh")
+    get_or_create_assignment("p1", questions, "uf")
     db["participant_assignments"].update_one(
         {"participant_id": "p1"},
         {"$set": {"rotation_scheme": "difficulty_balanced_v1"}},
@@ -97,7 +97,7 @@ def test_existing_difficulty_balanced_assignment_is_preserved(db, monkeypatch):
         raise AssertionError("existing assignment must not be recomputed")
 
     monkeypatch.setattr(assignment_module, "build_trial_sequence", must_not_redraw)
-    assert get_or_create_assignment("p1", questions, "uzh") == saved
+    assert get_or_create_assignment("p1", questions, "uf") == saved
     assert saved["rotation_scheme"] == "difficulty_balanced_v1"
     assert sum(_active_counts(db).values()) == 1
 
@@ -113,7 +113,7 @@ def test_get_assignment_never_creates_one(db):
 
 def test_allocation_stays_balanced(db):
     for i in range(1, 61):
-        get_or_create_assignment(f"p{i}", questions, "uzh")
+        get_or_create_assignment(f"p{i}", questions, "uf")
         counts = _active_counts(db)
         assert max(counts.values()) - min(counts.values()) <= 1
     assert _active_counts(db) == {"P": 30, "Q": 30}
@@ -129,7 +129,7 @@ def test_counts_are_based_on_assignments_not_completions(db):
 
 
 def test_less_filled_order_is_chosen_without_randomness(db, monkeypatch):
-    get_or_create_assignment("p0", questions, "uzh")
+    get_or_create_assignment("p0", questions, "uf")
     (first,) = [d["sequence_label"] for d in db["participant_assignments"].docs]
 
     offered = []
@@ -140,7 +140,7 @@ def test_less_filled_order_is_chosen_without_randomness(db, monkeypatch):
             return options[0]
 
     monkeypatch.setattr(assignment_module, "_tie_break_rng", Recorder())
-    get_or_create_assignment("p1", questions, "uzh")
+    get_or_create_assignment("p1", questions, "uf")
     other = "Q" if first == "P" else "P"
     assert offered == [[other]]
 
@@ -159,7 +159,7 @@ def test_ties_are_broken_at_random(monkeypatch):
         fake = FakeDB()
         with patch("app.utils.assignment.get_collection", fake.get_collection):
             monkeypatch.setattr(assignment_module, "_tie_break_rng", Recorder())
-            first_labels.add(get_or_create_assignment("p", questions, "uzh")["sequence_label"])
+            first_labels.add(get_or_create_assignment("p", questions, "uf")["sequence_label"])
     # Every first assignment is a tie between both orders...
     assert all(o == ["P", "Q"] for o in offered)
     # ...and the draw lands on both, rather than always the same one.
@@ -206,7 +206,7 @@ def test_legacy_assignment_is_returned_unchanged_and_never_overwritten(db):
     }
     db.get_collection("participant_assignments").docs.append(copy.deepcopy(legacy))
 
-    result = get_or_create_assignment("legacy-1", questions, "uzh")
+    result = get_or_create_assignment("legacy-1", questions, "uf")
     assert result["sequence_design_version"] is None
     assert result["sequence_label"] == "S3"
     assert result["question_order"] == legacy["problem_at_position"]
@@ -238,7 +238,7 @@ def _run_threads(n, target):
 
 
 def test_concurrent_new_participants_stay_balanced(db):
-    _run_threads(40, lambda i: get_or_create_assignment(f"p{i}", questions, "uzh"))
+    _run_threads(40, lambda i: get_or_create_assignment(f"p{i}", questions, "uf"))
 
     assert len(db["participant_assignments"].docs) == 40
     assert _active_counts(db) == {"P": 20, "Q": 20}
@@ -260,7 +260,7 @@ def test_concurrent_requests_for_one_participant_give_one_assignment(db, monkeyp
     results = [None] * n
 
     def request(i):
-        results[i] = get_or_create_assignment("same-person", questions, "uzh")
+        results[i] = get_or_create_assignment("same-person", questions, "uf")
 
     _run_threads(n, request)
 
@@ -275,14 +275,15 @@ def test_concurrent_requests_for_one_participant_give_one_assignment(db, monkeyp
 # --- per-site balance -----------------------------------------------------------
 
 
-def test_each_site_is_balanced_on_its_own(db):
-    # UF fills up quickly while UZH trickles in: UZH must still be balanced.
+def test_uzh_fixed_design_does_not_change_uf_balance(db):
+    # UZH uses its fixed design while UF keeps balanced P/Q allocation.
     for i in range(40):
         get_or_create_assignment(f"uf{i}", questions, "uf")
         if i % 4 == 0:
             get_or_create_assignment(f"uzh{i}", questions, "uzh")
 
-    assert _active_counts(db, "uzh") == {"P": 5, "Q": 5}
+    assert _active_counts(db, "uzh") == {}
+    assert all(d["sequence_label"] == "UZH14" for d in db["participant_assignments"].docs if d["site"] == "uzh")
     assert _active_counts(db, "uf") == {"P": 20, "Q": 20}
     sites = {d["participant_id"][:2]: d["site"] for d in db["participant_assignments"].docs}
     assert sites == {"uf": "uf", "uz": "uzh"}
@@ -300,7 +301,7 @@ def test_an_unbalanced_site_does_not_steer_another_site(db, monkeypatch):
 
     monkeypatch.setattr(assignment_module, "_tie_break_rng", Recorder())
     get_or_create_assignment("uzh-first", questions, "uzh")
-    assert offered == [["P", "Q"]]  # a tie at UZH, whatever UF looks like
+    assert offered == []  # UZH never enters the P/Q allocator
 
 
 def test_the_old_per_design_unique_index_is_replaced(db):
@@ -316,5 +317,5 @@ def test_the_old_per_design_unique_index_is_replaced(db):
 
     assert "design_version_label_unique" not in coll.index_information()
     assert "design_version_site_label_unique" in coll.index_information()
-    assert sum(_active_counts(db, "uzh").values()) == 1
+    assert _active_counts(db, "uzh") == {}
     assert sum(_active_counts(db, "uf").values()) == 1

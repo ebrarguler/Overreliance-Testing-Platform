@@ -36,9 +36,9 @@ FINAL_TEXT_ITEMS = {
 # Part 2 of the final survey, shown only after part 1 is complete: it names
 # the "I don't know" answers, so seeing it first would shape the answer to
 # the unusual-behaviour question above.
-# The two items share one stem and point in opposite directions (H2b: an
-# abstention shows the assistant can fail; H2a: it makes its confident answers
-# more believable). "Not sure" matches the wordings participants saw
+# The two items share one stem and point in opposite directions (H2a: an
+# abstention shows the assistant can fail, so people become more skeptical;
+# H2b: it makes its confident answers more believable). "Not sure" matches the wordings participants saw
 # (IDK_ABSTENTIONS); none of them says "I don't know".
 FINAL_CHANGE_ITEMS = {
     "idk_more_skeptical": "After the assistant said it was not sure about an answer, I became more skeptical of its answers to other questions",

@@ -7,7 +7,8 @@ Usage
     # from the project root:
     python scripts/export_data.py
     python scripts/export_data.py --output-dir path/to/dir
-    python scripts/export_data.py --design blocks_pq_v1   # current P/Q design only
+    python scripts/export_data.py --design blocks_pq_v1   # historical UZH / retained UF P/Q only
+    python scripts/export_data.py --design uzh_fixed14_v1 # new UZH design
     python scripts/export_data.py --design option6_v1     # Option 6 only
     python scripts/export_data.py --design legacy_unversioned
 
@@ -43,7 +44,7 @@ aggregates.json   — sample-level metrics from docs/MEASURES.md §8, with
 Designs
 -------
 `sequence_design_version` is exported exactly as stored: "blocks_pq_v1"
-for the current P/Q design, "option6_v1" for Option 6 records, blank for
+for the P/Q design, "uzh_fixed14_v1" for new UZH assignments, "option6_v1" for Option 6 records, blank for
 records made before design versioning (the six-order S1-S6 design).
 `design_group` is the same value with blanks shown as "legacy_unversioned",
 so the designs can be filtered and summarised apart. --design restricts
@@ -353,6 +354,11 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "sequence_design_version": doc.get("sequence_design_version", ""),
             "design_group": design_group(doc),
             "sequence_id": record.get("sequence_id", doc.get("sequence_label", "")),
+            "first_route": record.get("first_route", ""),
+            **{field: record.get(field) for field in (
+                "initial_option_id", "ai_endorsed_option_id", "correct_option_id", "final_option_id",
+            )},
+            "option_ids": json.dumps(record.get("option_ids", {}), sort_keys=True),
             "position": record.get("position", pos_0 + 1),
             "section": record.get("section", ""),
             "problem_id": record.get("problem_id", q_idx),
@@ -376,6 +382,10 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
             "reliance_code": record.get("reliance_code", ""),
 
             "served_at": timestamps.get("served_at", ""),
+            **{field: timestamps.get(field) for field in (
+                "question_displayed_at", "question_display_ack_at", "ai_requested_at",
+                "ai_visible_at", "ai_visible_ack_at",
+            )},
             "first_interaction_at": timestamps.get("first_interaction_at", ""),
             "first_submit_at": timestamps.get("first_submit_at", ""),
             "final_submit_at": timestamps.get("final_submit_at", ""),
@@ -409,6 +419,7 @@ def build_trial_rows(doc: dict, participant_id: int) -> list[dict]:
 
             "idk_encounter_number": record.get("idk_encounter_number", ""),
             "is_primary_pq_probe": record.get("is_primary_pq_probe", ""),
+            "is_uzh_wrong_probe": record.get("is_uzh_wrong_probe", ""),
             "pq_probe_context": record.get("pq_probe_context", ""),
             "is_primary_option6_probe": record.get("is_primary_option6_probe", ""),
             "option6_probe_context": record.get("option6_probe_context", ""),
@@ -603,7 +614,7 @@ def compute_aggregates(all_trial_rows: list[dict]) -> dict:
         "note": (
             "Expected 0 for legacy_unversioned (S1-S6), one per participant "
             "for option6_v1, and one per P / two per Q participant for "
-            "blocks_pq_v1 — see docs/MEASURES.md section 5."
+            "blocks_pq_v1; zero for uzh_fixed14_v1 — see docs/MEASURES.md."
         ),
     }
 
@@ -726,7 +737,8 @@ def compute_aggregates_by_design(all_trial_rows: list[dict]) -> dict:
 
 DEMOGRAPHIC_FIELDS = ["age_category", "gender", "ethnicity", "ai_usage", "ai_frequency", "ai_use_type",
                       "academic_level", "major_category", "minor_category", "gpa", "gpa_scale"]
-CHAT_METADATA_FIELDS = ["policy_filter_reason", "after_answer", "requested_model", "response_model", "prompt_hash", "app_commit",
+CHAT_METADATA_FIELDS = ["request_id", "response_status", "received_before_submission", "ai_visible_at", "ai_visible_ack_at",
+                        "policy_filter_reason", "after_answer", "requested_model", "response_model", "prompt_hash", "app_commit",
                         "app_source_hash", "app_dirty", "study_phase", "protocol_version", "stated_option", "option_coding_status"]
 PARTICIPANT_FIELDS = (
     [
@@ -744,6 +756,9 @@ PARTICIPANT_FIELDS = (
 )
 
 TRIAL_FIELDS = [
+    "first_route", "initial_option_id", "ai_endorsed_option_id", "correct_option_id", "final_option_id", "option_ids",
+    "question_displayed_at", "question_display_ack_at", "ai_requested_at", "ai_visible_at", "ai_visible_ack_at",
+    "is_uzh_wrong_probe",
     "participant_id",
     "participant_uuid",
     "sequence_design_version",

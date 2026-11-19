@@ -10,6 +10,7 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
+from markupsafe import escape
 from flask import Flask
 
 from app.routes import main_bp
@@ -178,7 +179,7 @@ def test_double_submitted_consent_creates_one_participant_and_one_allocation(iso
     assert len(isolated_database.get_collection("participants").docs) == 1
     assert len(isolated_database.get_collection("participant_assignments").docs) == 1
     counts = isolated_database.get_collection("sequence_counts").docs
-    assert sum(doc["count"] for doc in counts if doc.get("site") == site) == 1
+    assert sum(doc["count"] for doc in counts if doc.get("site") == site) == (0 if site == "uzh" else 1)
 
 
 def test_a_new_session_still_gets_a_new_participant(isolated_database):
@@ -318,7 +319,7 @@ def test_attrition_reports_the_assigned_order(isolated_database, tmp_path):
     client.post("/consent", data=CONSENT)
     rows = write_attrition(tmp_path)
     assert len(rows) == 1
-    assert rows[0]["sequence_label"] in {"P", "Q"}
+    assert rows[0]["sequence_label"] == "UZH14"
     assert rows[0]["rotation_scheme"] == "uniform_random_v1"
 
 
@@ -337,23 +338,261 @@ def _completed_client():
         complete_trials(sess)
         sess["question_index"] = len(sess["question_order"])
     response = client.post("/final_survey", data={name: "4" for name in FINAL_SURVEY_FIELDS})
-    assert response.headers["Location"].endswith("/debrief")
+    assert response.headers["Location"].endswith("/completion")
     return client
 
 
-def test_debrief_hides_answers_by_default_and_asks_not_to_share(monkeypatch):
-    monkeypatch.delenv("DEBRIEF_SHOW_ANSWERS", raising=False)
-    html = _completed_client().get("/debrief").get_data(as_text=True)
-    assert "scripted" in html
-    assert "Please do not share" in html
-    assert "Correct answer:" not in html
-    assert "do not show the correct answers" in html
+def test_study_explanation_shows_no_answers_and_asks_not_to_share():
+    client = _completed_client()
+    # UZH's explanation lives at /completion; /debrief sends UZH there.
+    assert client.get("/debrief").headers["Location"].endswith("/completion")
+    html = client.get("/completion").get_data(as_text=True)
+    assert "prepared in advance" in html and "Wrong on purpose" in html
+    assert "Please keep this to yourself" in html
+    assert "Correct answer" not in html
+    # One way forward: the choice. No shortcut to the results before it.
+    assert 'name="choice" value="keep"' in html and 'name="choice" value="withdraw"' in html
+    assert 'href="/results"' not in html
 
 
-def test_debrief_shows_answers_once_enabled(monkeypatch):
-    monkeypatch.setenv("DEBRIEF_SHOW_ANSWERS", "true")
-    html = _completed_client().get("/debrief").get_data(as_text=True)
-    assert html.count("Correct answer:") == 14
+# --- Results page (2026-11-15) -------------------------------------------------------
+
+
+def _completed_client_with_answers(wrong_positions=()):
+    """Like _completed_client, with wrong answers at the given positions."""
+    from app.utils.questions import questions
+    from app.utils import trial_store
+    client = _app().test_client()
+    client.get("/")
+    client.post("/consent", data=CONSENT)
+    with client.session_transaction() as sess:
+        prepare_session(sess)
+        for position in wrong_positions:
+            q = sess["question_order"][position]
+            wrong = next(o for o in questions[q]["options"] if o != questions[q]["correct"])
+            trial_store.record_answer(sess["participant_id"], position, {
+                "question_index": q, "position": position + 1, "answer": wrong,
+            })
+        complete_trials(sess)  # first write wins, so the wrong answers stay
+        sess["question_index"] = len(sess["question_order"])
+    client.post("/final_survey", data={name: "4" for name in FINAL_SURVEY_FIELDS})
+    return client
+
+
+def test_uzh_results_wait_for_the_data_use_choice(isolated_database):
+    """Results, the withdrawal code and the debrief cannot be skipped: a
+    record left "pending" would be dropped from the export."""
+    client = _completed_client()
+    assert client.get("/results").headers["Location"].endswith("/completion")
+    client.post("/completion", data={"choice": "keep"})
+    resp = client.get("/results")
+    assert resp.status_code == 200
+    assert "Your results" in resp.get_data(as_text=True)
+
+
+def test_uzh_completion_refresh_and_revisit_preserve_pending_choice(isolated_database):
+    client = _completed_client()
+    code = isolated_database.get_collection("participants").find_one({})["withdrawal_code"]
+    for _ in range(2):
+        html = client.get("/completion").get_data(as_text=True)
+        assert "You’ve completed the study" in html
+        assert code in html and 'href="/withdraw"' in html
+        assert 'class="score-card"' not in html
+        assert 'type="email"' in html  # the optional prize draw
+        # Withdrawing is folded away below the main button, and Enter in the
+        # email field uses the first submit button: "Join the draw".
+        assert html.index('value="join_draw"') < html.index('value="keep"') < html.index('<details class="withdraw-option">') < html.index('value="withdraw"')
+    assert client.get("/final_survey").headers["Location"].endswith("/completion")
+    assert client.post("/final_survey", data={}).headers["Location"].endswith("/completion")
+    client.get("/results")
+    doc = isolated_database.get_collection("users").find_one({})
+    assert doc["data_use"] == "pending"
+    assert isolated_database.get_collection("participants").find_one({}).get("data_use") is None
+    client.delete_cookie("session")
+    # The existing participant cookie also supports revisiting after session expiry.
+    assert client.get("/completion").status_code == 200
+    assert client.get("/results").headers["Location"].endswith("/completion")
+
+
+def test_uzh_choice_without_an_option_shows_the_page_again():
+    client = _completed_client()
+    resp = client.post("/completion", data={})
+    assert resp.status_code == 400
+    assert "Please choose whether we may use your responses." in resp.get_data(as_text=True)
+
+
+def test_resubmitting_the_saved_choice_keeps_its_decision_time(isolated_database):
+    client = _completed_client()
+    client.post("/completion", data={"choice": "keep"})
+    participants = isolated_database.get_collection("participants")
+    decided_at = participants.find_one({})["data_use_decided_at"]
+    html = client.get("/completion").get_data(as_text=True)
+    assert "You have allowed us to use your responses" in html
+    assert client.post("/completion", data={"choice": "keep"}).headers["Location"].endswith("/results")
+    assert participants.find_one({})["data_use_decided_at"] == decided_at
+
+
+def test_withdrawn_participant_sees_status_instead_of_the_form():
+    client = _completed_client()
+    client.post("/completion", data={"choice": "withdraw"})
+    html = client.get("/completion").get_data(as_text=True)
+    assert "You withdrew your responses" in html
+    assert 'name="choice"' not in html and 'href="/results"' in html
+
+
+# --- Prize draw (2026-11-19) ------------------------------------------------------
+
+
+def _draw_entries(db):
+    return db.get_collection("prize_draw_entries").docs
+
+
+def test_joining_the_draw_stores_the_email_apart_from_research_data(isolated_database, tmp_path):
+    from scripts.export_data import write_exports
+    client = _completed_client()
+    resp = client.post("/completion", data={"action": "join_draw", "draw_email": "  Student@Example.org "})
+    assert resp.headers["Location"].endswith("/completion#prize-draw")
+    entries = _draw_entries(isolated_database)
+    assert len(entries) == 1
+    assert entries[0]["email"] == "student@example.org"
+    assert isinstance(entries[0]["_id"], str)  # no ObjectId, so no insertion time
+    assert set(entries[0]) == {"_id", "email", "site"}  # no participant_id
+    participant = isolated_database.get_collection("participants").find_one({})
+    assert participant["prize_draw_entered"] is True
+    assert participant.get("data_use") is None  # joining is not a data-use choice
+    html = client.get("/completion").get_data(as_text=True)
+    assert "You’ve joined the prize draw" in html and 'type="email"' not in html
+    # Only one entry per participant.
+    client.post("/completion", data={"action": "join_draw", "draw_email": "other@example.org"})
+    assert len(_draw_entries(isolated_database)) == 1
+    # The research export never sees the email.
+    client.post("/completion", data={"choice": "keep"})
+    doc = isolated_database.get_collection("users").find_one({})
+    doc["data_use"] = "keep"
+    write_exports([doc], tmp_path)
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert "student@example.org" not in path.read_text(errors="ignore")
+
+
+def test_email_typed_before_the_choice_is_saved_whatever_the_choice(isolated_database):
+    client = _completed_client()
+    resp = client.post("/completion", data={"choice": "withdraw", "draw_email": "student@example.org"})
+    assert resp.headers["Location"].endswith("/results")
+    assert [e["email"] for e in _draw_entries(isolated_database)] == ["student@example.org"]
+    assert isolated_database.get_collection("participants").find_one({})["data_use"] == "withdraw"
+
+
+@pytest.mark.parametrize("form,message", [
+    ({"choice": "keep", "draw_email": "not-an-email"}, "Please enter a valid email address"),
+    ({"action": "join_draw", "draw_email": ""}, "Please enter your email address to join the draw"),
+])
+def test_invalid_draw_entry_saves_nothing(isolated_database, form, message):
+    client = _completed_client()
+    resp = client.post("/completion", data=form)
+    assert resp.status_code == 400
+    html = resp.get_data(as_text=True)
+    assert message in html and f'value="{form["draw_email"]}"' in html
+    assert _draw_entries(isolated_database) == []
+    assert isolated_database.get_collection("participants").find_one({}).get("data_use") is None
+
+
+def test_prize_draw_can_be_switched_off(isolated_database, monkeypatch):
+    monkeypatch.setenv("PRIZE_DRAW_ENABLED", "0")
+    client = _completed_client()
+    assert 'type="email"' not in client.get("/completion").get_data(as_text=True)
+    client.post("/completion", data={"choice": "keep", "draw_email": "student@example.org"})
+    assert _draw_entries(isolated_database) == []
+    fresh = _app().test_client()
+    fresh.get("/")
+    assert "UZH does not ask for your name, email, or student ID." in fresh.get("/consent").get_data(as_text=True)
+
+
+def test_consent_mentions_the_optional_draw():
+    client = _app().test_client()
+    client.get("/")
+    html = client.get("/consent").get_data(as_text=True)
+    assert "leave your email address for a prize draw" in html
+
+
+def test_completion_requires_a_finished_study():
+    client = _app().test_client()
+    assert client.get("/completion").headers["Location"].endswith("/")
+    client.get("/")
+    client.post("/consent", data=CONSENT)
+    assert client.get("/completion").headers["Location"].endswith("/")
+
+
+def test_uf_retains_debrief_before_results():
+    client = _app().test_client()
+    client.get("/start/uf")
+    client.post("/validate_email", data=UF_FORM)
+    client.post("/consent", data=CONSENT)
+    with client.session_transaction() as sess:
+        prepare_session(sess)
+        sess["site"] = "uf"
+        complete_trials(sess)
+        sess["question_index"] = len(sess["question_order"])
+    response = client.post("/final_survey", data={name: "4" for name in FINAL_SURVEY_FIELDS})
+    assert response.headers["Location"].endswith("/debrief")
+    assert client.get("/completion").headers["Location"].endswith("/debrief")
+    assert client.get("/results").headers["Location"].endswith("/debrief")
+    html = client.get("/debrief").get_data(as_text=True)  # the same page as UZH's /completion
+    assert 'name="choice" value="keep"' in html and "w.pitts@ufl.edu" in html
+    assert client.post("/debrief", data={"choice": "keep"}).headers["Location"].endswith("/results")
+    assert 'href="/completion"' not in client.get("/results").get_data(as_text=True)
+
+
+def test_results_are_not_shown_before_the_study_is_finished():
+    client = _app().test_client()
+    client.get("/")
+    client.post("/consent", data=CONSENT)
+    assert client.get("/results").headers["Location"].endswith("/")
+
+
+@pytest.mark.parametrize("choice", ["keep", "withdraw"])
+def test_choice_leads_to_score_and_answers(choice):
+    from app.utils.questions import questions
+    client = _completed_client_with_answers(wrong_positions=(0, 3))
+    resp = client.post("/completion", data={"choice": choice})
+    assert resp.headers["Location"].endswith("/results")
+
+    html = client.get("/results").get_data(as_text=True)
+    assert '<span class="score-value">12</span><span class="score-total">/ 14</span>' in html
+    assert html.count('class="result-item is-correct"') == 12
+    assert html.count('class="result-item is-incorrect"') == 2
+    # The correct answer is listed under the wrong ones.
+    assert html.count("<dt>Correct answer</dt>") == 2
+    with client.session_transaction() as sess:
+        first = questions[sess["question_order"][0]]
+    assert f'<dd class="is-right">{escape(first["correct"])}</dd>' in html
+    assert "not a measure of your programming ability" in html
+    assert 'href="/thank_you"' in html
+
+
+def test_results_discourage_copying_and_offer_the_study_link(monkeypatch):
+    monkeypatch.delenv("STUDY_PUBLIC_URL", raising=False)
+    client = _completed_client()
+    client.post("/completion", data={"choice": "keep"})
+    html = client.get("/results", headers={"X-Forwarded-Proto": "https"}).get_data(as_text=True)
+
+    assert 'id="results-list"' in html and "js/end_pages.js" in html
+    script = (Path(__file__).resolve().parent.parent / "app" / "static" / "js" / "end_pages.js").read_text()
+    assert '"copy", "cut", "contextmenu", "dragstart"' in script  # copying is blocked on the list
+    assert "Please do not save, copy or share" in html
+    assert 'id="study-link"' not in html  # no configured public entry URL
+    assert 'href="/completion"' in html
+
+
+def test_study_link_can_be_set_explicitly(monkeypatch):
+    monkeypatch.setenv("STUDY_PUBLIC_URL", "https://study.example.org/")
+    client = _completed_client()
+    client.post("/completion", data={"choice": "keep"})
+    assert 'value="https://study.example.org/"' in client.get("/results").get_data(as_text=True)
+
+
+def url_for_thank_you():
+    return 'href="/thank_you"'
 
 
 # --- 2026-11-05: UZH entry, tool instruction, delay, final survey part 2, demographics ---
@@ -418,7 +657,7 @@ def test_final_survey_requires_and_stores_the_change_items(isolated_database):
 
     answers = {name: "4" for name in FINAL_SURVEY_FIELDS}
     answers["usage_change"] = "I checked its answers more after it was wrong."
-    assert client.post("/final_survey", data=answers).headers["Location"].endswith("/debrief")
+    assert client.post("/final_survey", data=answers).headers["Location"].endswith("/completion")
     doc = isolated_database.get_collection("users").find_one({})
     assert doc["final_survey_answers"]["idk_more_skeptical"] == "4"
     row = build_participant_row(doc, 1)

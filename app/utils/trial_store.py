@@ -10,8 +10,10 @@ finished, erasing an answer submitted in the meantime. Now:
   trials            one document per (participant_id, position): the answer
                     record from /quiz and, once given, the post-trial rating.
                     A unique index makes the first answer for a position win.
-  chat_turns        one document per recommendation exposure or follow-up
-                    turn, insert-only. At most one recommendation exposure
+  chat_turns        one document per recommendation request or follow-up.
+                    UZH follow-ups are inserted pending, then completed in
+                    place; recommendation visibility is acknowledged later.
+                    At most one recommendation request
                     per (participant_id, question_index).
   survey_responses  one document per participant with the demographics and
                     pre-survey answers, so a participant who comes back does
@@ -23,6 +25,7 @@ from these collections (routes.final_survey).
 """
 
 import time
+import uuid
 
 from pymongo.errors import DuplicateKeyError
 
@@ -129,15 +132,40 @@ def _turn_doc(participant_id, position, entry):
 
 
 def log_turn(participant_id, position, entry):
-    """Append one follow-up chat turn (successful or failed)."""
+    """Complete a pending UZH turn once; append for the existing UF flow."""
     entry = dict(entry)
     entry["after_answer"] = _trials().find_one({"participant_id": participant_id, "position": position}) is not None
+    if entry.get("request_id"):
+        entry["response_status"] = "failed" if entry.get("is_error") else "completed"
+        _chat_turns().update_one(
+            {"participant_id": participant_id, "request_id": entry["request_id"],
+             "response_status": "pending"}, {"$set": entry},
+        )
+        return
     _chat_turns().insert_one(_turn_doc(participant_id, position, entry))
+
+
+def begin_followup(participant_id, position, question_index, message, sent_at):
+    """Durably save a voluntary request before calling the model (UZH)."""
+    request_id = uuid.uuid4().hex
+    trial = _trials().find_one({"participant_id": participant_id, "position": position})
+    submitted = ((trial or {}).get("answer", {}).get("timestamps") or {}).get("final_submit_at")
+    _chat_turns().insert_one(_turn_doc(participant_id, position, {
+        "request_id": request_id, "question_index": question_index,
+        "entry_type": "followup", "is_initial_recommendation": False,
+        "user_message": message, "sent_at": sent_at,
+        "received_before_submission": sent_at < submitted if submitted else trial is None,
+        "response_status": "pending", "is_error": None,
+        "assistant_message": None, "shown_to_participant": False,
+        "timestamp": None,
+    }))
+    return request_id
 
 
 def log_recommendation(participant_id, position, entry):
     """
-    Record that the initial recommendation was shown for this question.
+    Save one initial recommendation for this question. UZH records actual
+    browser visibility separately via record_visibility.
     Returns the stored entry: the one already there if two requests raced
     (e.g. a double click), so the participant always sees one text.
     """
@@ -235,6 +263,36 @@ ACCESS_FIELDS = (
     "pre_ai_abandoned", "pre_ai_unsaved_selection", "pre_ai_n_changes",
 )
 
+VISIBILITY_FIELDS = (
+    "question_displayed_at", "question_display_ack_at",
+    "ai_visible_at", "ai_visible_ack_at",
+)
+
+
+def trial_visibility(participant_id, position):
+    doc = _trial_starts().find_one({"participant_id": participant_id, "position": position}) or {}
+    return {field: doc.get(field) for field in VISIBILITY_FIELDS}
+
+
+def record_visibility(participant_id, position, question_index, event, visible_at, received_at):
+    """First browser visibility acknowledgement wins; never infer it from a request."""
+    field, ack = (("question_displayed_at", "question_display_ack_at") if event == "question"
+                  else ("ai_visible_at", "ai_visible_ack_at"))
+    start_trial(participant_id, position)
+    _trial_starts().update_one(
+        {"participant_id": participant_id, "position": position, field: {"$exists": False}},
+        {"$set": {field: visible_at, ack: received_at}},
+    )
+    if event == "recommendation":
+        values = trial_visibility(participant_id, position)
+        _chat_turns().update_one(
+            {"participant_id": participant_id, "question_index": question_index,
+             "is_initial_recommendation": True},
+            {"$set": {"shown_to_participant": True, "ai_visible_at": values[field],
+                      "ai_visible_ack_at": values[ack]}},
+        )
+    return trial_visibility(participant_id, position)
+
 
 def trial_access(participant_id, position):
     doc = _trial_starts().find_one({"participant_id": participant_id, "position": position}) or {}
@@ -298,11 +356,15 @@ def assemble(participant_id, order):
     for record in records:
         q = record["question_index"]
         answer = dict(record["answer"])
+        visibility = trial_visibility(participant_id, record["position"])
+        if any(value is not None for value in visibility.values()):
+            answer["timestamps"] = {**answer.get("timestamps", {}), **visibility}
         transcript = [t for t in turns if t["question_index"] == q]
         followups = [t for t in transcript if not t["is_initial_recommendation"]]
         answer["chat"] = {
             "transcript": transcript,
-            "n_turns": sum(not t.get("is_error", False) and not t.get("after_answer", False) for t in followups),
+            "n_turns": sum(t.get("response_status") != "pending" and not t.get("is_error", False)
+                           and not t.get("after_answer", False) for t in followups),
             "n_turns_attempted": sum(not t.get("after_answer", False) for t in followups),
             "n_late_turns": sum(t.get("after_answer", False) for t in followups),
             # Every message the participant sent on this trial, including

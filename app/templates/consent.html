@@ -59,7 +59,7 @@
 
 			<div class="info-block">
                 <h3>What is recorded and shared</h3>
-                <p>We record your survey answers, selected answers, timing, changes to selections, chat messages and replies, counts of copying and pasting, and how often and how long you leave the study page during a question. UZH does not ask for your name, email, or student ID. Please do not enter personal information in chat.</p>
+                <p>We record your survey answers, selected answers, timing, changes to selections, chat messages and replies, counts of copying and pasting, and how often and how long you leave the study page during a question. {% if prize_draw_enabled %}UZH does not ask for your name or student ID. At the end, you can choose to leave your email address for a prize draw; it is stored separately from your answers, used only to contact the winners and deleted after the draw.{% else %}UZH does not ask for your name, email, or student ID.{% endif %} Please do not enter personal information in chat.</p>
                 <p>Your chat messages and the programming problem are sent to OpenAI to generate replies. We do not send your demographic answers or participant code in the model prompt.</p>
                 <p>Some study details will be explained after the final survey. You can then decide whether your responses may be used. You will receive a code to withdraw them from research analysis{% if withdrawal_deadline %} until {{ withdrawal_deadline }}{% endif %}.</p>
                 <p>{{ research_note }}</p>

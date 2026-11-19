@@ -24,11 +24,14 @@ def test_debrief_requires_final_survey_and_excludes_pending_data(client, db, tmp
     with client.session_transaction() as sess:
         complete_trials(sess)
     response = client.post('/final_survey', data=FINAL)
-    assert response.headers['Location'].endswith('/debrief')
+    assert response.headers['Location'].endswith('/completion')
+    assert client.get('/completion').status_code == 200
+    assert client.get('/results').headers['Location'].endswith('/completion')
     doc = db.get_collection('users').find_one({})
     assert write_exports([doc], tmp_path)['n_exported'] == 0
-    assert 'scripted' in client.get('/debrief').get_data(as_text=True)
-    client.post('/debrief', data={'choice': 'keep'})
+    assert 'prepared in advance' in client.get('/completion').get_data(as_text=True)
+    client.post('/debrief', data={'choice': 'keep'})  # still accepted for UZH
+    assert client.get('/results').status_code == 200
     doc = db.get_collection('users').find_one({})
     assert write_exports([doc], tmp_path)['n_exported'] == 1
     part = db.get_collection('participants').find_one({})

@@ -153,6 +153,7 @@ def compute_design_fields(realized_types, position_0idx, design_version):
         PQ_DESIGN_VERSION,
         pq_probe_context,
         probe_context,
+        UZH_DESIGN_VERSION, UZH_WRONG_PROBE_POSITIONS,
     )
 
     current_type = realized_types[position_0idx]
@@ -178,6 +179,10 @@ def compute_design_fields(realized_types, position_0idx, design_version):
 
     return {
         "idk_encounter_number": idk_encounter_number,
+        "is_uzh_wrong_probe": (
+            design_version == UZH_DESIGN_VERSION
+            and position_1idx in UZH_WRONG_PROBE_POSITIONS and is_w
+        ),
         "is_primary_pq_probe": is_pq_probe,
         "pq_probe_context": (
             pq_probe_context(realized_types, position_1idx) if is_pq_probe else None
@@ -197,14 +202,15 @@ def compute_design_fields(realized_types, position_0idx, design_version):
 _SECTION_LABELS = ["early", "middle", "late"]
 
 
-def section_for_position(position_1idx):
+def section_for_position(position_1idx, design_version=None):
     """Map a 1-indexed trial position to "early"/"middle"/"late" using
     sequences.SECTION_BOUNDARIES, so there is only one copy of the
     boundaries. Under the blocks_pq design these are the three blocks."""
-    from .sequences import SECTION_BOUNDARIES  # local import: avoids a cycle at module load
+    from .sequences import SECTION_BOUNDARIES, UZH_SECTION_BOUNDARIES, UZH_DESIGN_VERSION
+    boundaries = UZH_SECTION_BOUNDARIES if design_version == UZH_DESIGN_VERSION else SECTION_BOUNDARIES
 
     idx0 = position_1idx - 1
-    for label, (start, end) in zip(_SECTION_LABELS, SECTION_BOUNDARIES):
+    for label, (start, end) in zip(_SECTION_LABELS, boundaries):
         if start <= idx0 < end:
             return label
     raise ValueError(

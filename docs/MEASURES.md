@@ -8,9 +8,10 @@ aggregate metric computed from trial data, under the three-trial-type design
 document and the code ever disagree, that's a bug — fix one to match the
 other, don't just pick whichever seems more convenient.
 
-**Three sequence designs exist in the data.** Records from the six-order
+**Four sequence designs exist in the data.** New UZH assignments use
+`uzh_fixed14_v1` (10 C, 2 W, 2 I; see the pilot inspection section below). Records from the six-order
 design (S1–S6) have no `sequence_design_version`; Option 6 records have
-`sequence_design_version = "option6_v1"`; records from the current block
+`sequence_design_version = "option6_v1"`; records from the P/Q block
 design have `"blocks_pq_v1"`. They differ in what `is_post_idk_cw` can be
 (§5) and in which trials are primary probes (§5). Analyse them separately;
 the export never pools them (§8.9).
@@ -26,7 +27,7 @@ Which problem is shown under which type is randomized per participant
 without difficulty labels (§6.1), so the same problem is `correct` for one participant
 and `confident_wrong` or `idk` for another.
 
-### 1.1 Block design, orders P and Q (`sequence_design_version = "blocks_pq_v1"`, current)
+### 1.1 Block design, orders P and Q (`sequence_design_version = "blocks_pq_v1"`, historical UZH / retained UF)
 
 ```
 Position:  1  2  3  4  5 | 6  7  8  9 10 | 11 12 13 14
@@ -36,9 +37,10 @@ Order Q:   C  C  I  W  C | C  W  C  I  C |  C  I  W  C
 
 Three blocks of 5, 5 and 4 positions, each with exactly one `confident_wrong`
 and one `idk` trial. Both orders open with two `correct` trials and are
-identical from position 6 on; they differ only at positions 3 and 5. New
+identical from position 6 on; they differ only at positions 3 and 5. New UF
 participants are allocated to P or Q, whichever has fewer assignments at
-their site (random when tied), so each site is balanced on its own.
+their site (random when tied). Existing UZH P/Q assignments are preserved;
+new UZH participants use the fixed sequence below.
 
 The primary probe is the W at position 4, the first W for everyone: in P it
 comes before any IDK, in Q immediately after the first IDK. It tests IDK
@@ -157,14 +159,19 @@ Mongo document (indexed by problem id, not presentation position — see
 | `reliance_code` | `ACCEPTED`\|`REJECTED`\|`NOT_APPLICABLE` | See §2 |
 | `chat.transcript[].sent_at` | ISO datetime | Server receipt time of the participant's message; `timestamp` on the same entry is when the reply was logged. Absent on older records |
 | `timestamps.served_at` | ISO datetime | When the trial was first rendered (`GET /quiz`) |
-| `timestamps.first_interaction_at` | ISO datetime or null | First client-side interaction of any kind (radio click, chat send, recommendation click) |
-| `timestamps.first_submit_at` | ISO datetime or null | First answer-option selection (see §4 — this is *not* a server round-trip) |
+| `timestamps.first_interaction_at` | ISO datetime or null | First client-side interaction of any kind (path button, radio click, chat send). Falls back to the server's `path_chosen_at` after a reload |
+| `timestamps.first_submit_at` | ISO datetime or null | First answer-option selection after the recommendation (see §4.1 — this is *not* a server round-trip). On the `self_first` path: `pre_ai_locked_at` |
+| `timestamps.path_chosen_at` | ISO datetime or null | Server time the first path button was used (§4.5). Null on records from before 2026-11-15 |
+| `timestamps.pre_ai_locked_at` | ISO datetime or null | Server time the own answer was saved, or "I'm not sure" was used (§4.5). Null on the `ai_first` path |
+| `ai_access_path` | `self_first`\|`self_first_abandoned`\|`ai_first` or null | How the recommendation was reached (§4.5). Null on records from before 2026-11-15 |
+| `self_first_button_left` | bool | Whether "Answer on my own first" was the left button (fixed per participant, §4.5) |
+| `pre_ai.*` | — | The answer saved before the recommendation and what happened to it: `answer`, `answer_place`, `is_correct`, `agreed_with_ai`, `switched_after_ai`, `switched_to_ai`, `n_changes`, `unsaved_selection`, `path_choice_s`, `own_attempt_s`. See §4.5 |
 | `timestamps.final_submit_at` | ISO datetime | Server receipt time of the `POST /quiz` that ends the trial |
 | `dwell_time_s` | float | `final_submit_at - served_at`, server-clock (`app/routes.py`'s existing `elapsed_time`) |
 | `idk_phrasing_id` | int or null | On IDK trials, which wording of `questions.IDK_ABSTENTIONS` (0, 1, 2) opened the trial. Each participant gets the three in a random order, one per IDK encounter, reproducible from the assignment seed. Null on other trials; absent on older records, which all used wording 0 |
-| `answer_revisions.initial_answer` | str | First option selected |
+| `answer_revisions.initial_answer` | str | First option selected after the recommendation; on the `self_first` path the saved own answer (§4.1) |
 | `answer_revisions.final_answer` | str | Same as `answer` |
-| `answer_revisions.n_changes` | int | Count of selection changes *after* the first (see §4) |
+| `answer_revisions.n_changes` | int | Count of selection changes *after* the first, after the recommendation (see §4.1). Changes before it are `pre_ai.n_changes` |
 | `chat.n_turns` | int | **Successful** follow-up messages: excludes the fixed "what's your recommended answer" trigger exchange *and* any turn where the model call failed (see `chat.transcript[].is_error` below) — this is what `followup_rate`/`idk_followup_rate` (§8.4, §8.6) are computed from |
 | `chat.n_turns_attempted` | int | Same as `chat.n_turns` but *including* failed turns — the participant tried to get a follow-up reply this many times, whether or not one was actually shown. Not currently used by any §8 formula; kept for auditing how often failures occur |
 | `chat.transcript` | list | Every exchange for this trial, each `{entry_type, timestamp, user_message, assistant_message, prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, is_initial_recommendation, is_error, shown_to_participant}`, plus `error_reason`/`finish_reason`/`raw_completion` on failed turns — see §4.4. `entry_type` is `initial_recommendation_request` or `followup` (absent on older records; `is_initial_recommendation` carries the same information) |
@@ -209,6 +216,17 @@ client-side (`app/templates/question.html`):
 
 The original response is never overwritten in place — `initial_answer` and
 `final_answer` are always both present.
+
+**Since 2026-11-15 these fields describe what happens after the
+recommendation.** On the `self_first` path (§4.5) the options unlock before
+the AI is seen. Changes made then are `pre_ai.n_changes`, not `n_changes`.
+When the recommendation appears, the saved own answer stays selected
+(deliberately without a "your answer" label, which would make switching feel
+like backing down and hint at the before/after comparison), so the server
+sets `initial_answer = pre_ai.answer` and `first_submit_at =
+pre_ai_locked_at`; `n_changes` counts changes after that. On the `ai_first`
+and `self_first_abandoned` paths nothing is selected when the recommendation
+appears, and the definitions above apply unchanged.
 
 ### 4.2 Positional covariates
 
@@ -306,6 +324,65 @@ using each turn's `assistant_message` — i.e. what was actually shown, so a
 failed turn's neutral message (not its raw/empty output) is what the model
 sees as its own prior reply. A new trial starts this history fresh: nothing
 from a previous `question_index` is ever included.
+
+### 4.5 How the recommendation was reached: `ai_access_path` and `pre_ai`
+
+Since 2026-11-15 every trial opens with the code and options visible but
+locked, and two equal buttons: **"Answer on my own first"** and **"See the
+AI's recommendation first"**. Which side "Answer on my own first" is on is
+random per participant (hash of `participant_id`), the same on all 14
+trials, and stored as `self_first_button_left`. Code:
+`app/utils/ai_access.py`; storage: the `trial_starts` document of the
+position (`trial_store.choose_path`, `trial_store.lock_pre_ai`).
+
+| `ai_access_path` | What the participant did |
+|---|---|
+| `ai_first` | Pressed "See the AI's recommendation first" |
+| `self_first` | Pressed "Answer on my own first", chose an option and pressed "Save my answer and see the AI's recommendation" |
+| `self_first_abandoned` | Pressed "Answer on my own first", then "I'm not sure – show me the AI's recommendation" |
+
+On every path the recommendation is shown before the answer can be
+submitted, so every trial still receives its assigned C/W/IDK treatment.
+The chat stays closed until the recommendation is shown, and the chat model
+is never told the own answer. The path and the own answer are stored on the
+server, first write wins: the own answer is written *before* the
+recommendation text is returned, so it cannot have been influenced by it,
+and a reload returns to the same step. Once a path is chosen it cannot be
+changed.
+
+`pre_ai` fields (null where they do not apply):
+
+| Field | Defined on | Meaning |
+|---|---|---|
+| `answer` | `self_first` | The saved own answer |
+| `answer_place` | `self_first` | Its place among the displayed options (1 = top) |
+| `is_correct` | `self_first` | Own answer correct |
+| `agreed_with_ai` | `self_first`, C/W | Own answer equals `ai_endorsed_answer` |
+| `switched_after_ai` | `self_first` | `answer` (final) differs from the own answer |
+| `switched_to_ai` | `self_first`, C/W, `agreed_with_ai = false` | Final answer equals `ai_endorsed_answer`. Undefined when the own answer already agreed with the AI (the trial cannot show reliance) and on IDK trials (no endorsed answer). This is the "switch fraction" of Yin et al. (2019) and Zhang et al. (2020) |
+| `n_changes` | `self_first`, `self_first_abandoned` | Selection changes before saving (client-side, reset on a reload) |
+| `unsaved_selection` | `self_first_abandoned` | An option that was selected, not saved, when the participant gave up |
+| `path_choice_s` | any path | Seconds from `served_at` to the first path button |
+| `own_attempt_s` | `self_first`, `self_first_abandoned` | Seconds from "Answer on my own first" to saving (or giving up) |
+
+Example, a W trial whose correct answer is A and whose AI recommends B: the
+participant presses "Answer on my own first" after 12 s, selects A, then C,
+then A again, saves at 65 s, reads the recommendation and submits B. Stored:
+`ai_access_path = self_first`, `pre_ai.answer = A`, `is_correct = true`,
+`agreed_with_ai = false`, `n_changes = 2`, `path_choice_s ≈ 12`,
+`own_attempt_s ≈ 53`, `switched_after_ai = true`, `switched_to_ai = true`,
+and, as before, `reliance_code = ACCEPTED`.
+
+**The path is self-selected.** Participants choose it per trial, so trials
+on different paths differ in who chose them and when (for example, a harder
+problem may prompt "AI first"). Compare paths only as behaviour; do not read
+a difference in reliance between `self_first` and `ai_first` trials as an
+effect of answering first. Useful questions it does support: does the
+own-first rate change after W or IDK trials (use the §4.2 covariates); at
+the H2 probe, does the path differ between P and Q (a possible mechanism,
+reported alongside the H2 estimate, which stays computed over all trials).
+With 3 W trials per participant, `self_first` W trials will be few; treat
+the switch measures and §8.10 as exploratory.
 
 ---
 
@@ -536,6 +613,41 @@ output files to one group. Older records lack the design fields that did
 not exist yet (`idk_encounter_number`, the Option 6 and P/Q probe fields);
 the export leaves these blank rather than filling them in.
 
+### 8.10 How the recommendation was reached (exploratory)
+
+Present in `aggregates.json` as `ai_access` only when trials carry an
+`ai_access_path` (records from 2026-11-15 on). Pooled over trials, every
+rate with its numerator and denominator. See §4.5 for why these are
+descriptive.
+
+Per trial type (`by_trial_type`):
+
+```
+own_first_rate        = #(path in {self_first, self_first_abandoned}) / #trials with a path
+abandoned_rate        = #(path == self_first_abandoned) / #(path in {self_first, self_first_abandoned})
+pre_ai_accuracy       = #(self_first, pre_ai.is_correct) / #self_first
+switch_after_ai_rate  = #(self_first, pre_ai.switched_after_ai) / #self_first
+switch_to_ai_rate     = #(self_first, pre_ai.switched_to_ai) / #(self_first, pre_ai.switched_to_ai not null)
+```
+
+`switch_to_ai_rate` is undefined (null) on IDK trials. `pre_ai_accuracy`
+should not differ by trial type, since problems are assigned to types at
+random and the AI has not been seen yet; a large difference is worth
+checking.
+
+Appropriate reliance (Schemmer et al., 2023), `self_first` trials only:
+
+```
+relative_ai_reliance   (RAIR) = #(correct trial, own answer wrong, final correct)
+                              / #(correct trial, own answer wrong)
+relative_self_reliance (RSR)  = #(confident_wrong trial, own answer correct, final correct)
+                              / #(confident_wrong trial, own answer correct)
+```
+
+With four options a wrong final answer on a W trial is usually, but not
+always, the AI's: `pre_ai.switched_to_ai` separates the two. These are
+pooled; per-participant versions can be computed from `trials.csv`.
+
 ---
 
 ## 9. What changed from the original (two-type) study's assumptions
@@ -560,7 +672,7 @@ New records log `protocol_version=durable_natural_v1` in runtime/chat metadata. 
 
 Answers/ratings are stored per participant/position and exported with identity joins. `option_order`, `target_wrong_answer`, and `chose_target_wrong_answer` support same-problem comparisons across W and IDK without inventing a pre-AI answer. Per-trial `difficulty` is a legacy author's label, absent on new trials; `post_difficulty` is the participant's rating.
 
-`post_trust=not_needed` records “I didn't need AI assistance” as a separate nonnumeric category, not a trust score or evidence that the recommendation was not viewed. Current numeric choices are the full 1–7 scale, with this additional option displayed separately. Earlier versions replaced numeric 1 with this category and offered only 2–7; existing responses retain their original values. `trust_chatgpt=not_used` (older records only; the item is no longer asked) is also non-numeric. Final overreliance means reverse-code `questioned_recommendations` and `verified_answers` using `8 - value`.
+`post_helpfulness=not_needed` records “I didn't need AI assistance” as a separate nonnumeric category, not a numeric rating or evidence that the recommendation was not viewed. Since 2026-11-15 only helpfulness offers it, after “Strongly agree”, behind a divider and in the same plain style as the other options (below the scale on narrower screens). Trust no longer offers it: every participant sees the recommendation, and the opt-out dropped exactly the confident participants' ratings (e.g. someone who kept a correct own answer against a W recommendation). Earlier versions offered it for trust (initially replacing numeric 1 and offering only 2–7), then for trust and helpfulness, highlighted beside “Strongly disagree”; existing responses, including `post_trust=not_needed`, retain their original values. `trust_chatgpt=not_used` (older records only; the item is no longer asked) is also non-numeric. Final overreliance means reverse-code `questioned_recommendations` and `verified_answers` using `8 - value`.
 
 `mentioned_options` records literal mentions. `stated_option` is a conservative explicit-output match, not a full semantic classifier. Unresolved replies need human coding. `policy_filter_reason` identifies IDK outputs replaced by an abstention; raw output is retained separately. Replies marked `after_answer` are retained but excluded from pre-answer follow-up counts. Decide these exclusions and treatment of filtered replies before analysis.
 
@@ -573,7 +685,7 @@ Completed new records require a keep decision for export; pending/withdrawn reco
 - **Printed forms.** Problem 0's options are written `"4, 3"` but Python prints `4 3`. `printed_forms` maps each option to its printed form; the IDK filter, `mentioned_options` and `stated_option` match either. The option texts are unchanged.
 - **Consent nonce.** A repeated submission of the same consent form (same session) returns the first participant instead of creating a second one with its own P/Q slot. `participants.consent_nonce` is unique.
 - **Exports.** `trials.csv` gains `rotation_scheme`, `protocol_version`, `study_phase`, option places, `n_messages_sent`, `n_late_turns` and the visibility counts; `chat_messages.csv` gains `sent_at`; `attrition.csv` gains `sequence_label` and `rotation_scheme`, so dropout can be compared between P and Q.
-- **Debrief.** The answer list is hidden unless `DEBRIEF_SHOW_ANSWERS=true` (set it after recruitment closes). The page asks participants not to share the study details.
+- **Debrief.** The answer list is hidden unless `DEBRIEF_SHOW_ANSWERS=true` (set it after recruitment closes). The page asks participants not to share the study details. *(Superseded on 2026-11-15: the switch is gone; see "Results page" below.)*
 - **Hypothesis numbering.** The position-4 probe hypothesis is now H2 (formerly "H4").
 
 ## Entry, final survey part 2 and demographics (2026-11-05)
@@ -581,3 +693,232 @@ Completed new records require a keep decision for export; pending/withdrawn reco
 - **Entry.** `/` is the UZH entry page; `/start/uzh` redirects to it. UF keeps `/start/uf` (not in active use).
 - **Final survey (21 questions).** Part 1: the 17 original items and `assistant_observations` (the suspicion check). Part 2, shown only after part 1 is complete because it mentions the abstentions: `idk_more_skeptical` ("After the assistant said it was not sure about an answer, I became more skeptical of its answers to other questions") and `idk_more_trust` ("After the assistant said it was not sure about an answer, I trusted its answers to other questions more"), both 1–7 agreement, then `usage_change` ("Did the way you used the assistant change during the study? If so, please explain why."). The two closed items share a stem and point in opposite directions (self-reports for the competing H2 accounts); do not average them, and treat strong agreement with both as inconsistent. Both parts are submitted together and stored in `final_survey_answers`; `participants.csv` exports the new items one by one. They belong to no scale and are retrospective self-reports, not measures of behaviour. No longer asked: `trust_this_assistant`, `trust_chatgpt`, `study_purpose_guess`, `other_tools`, and the items only in commit 1892c77 (`became_more_skeptical`, `trust_increased`, `idk_changed_use`, `idk_more_credible`); their columns stay for older records. Without `other_tools`, use of outside tools is visible only through the per-trial `n_hidden`, `hidden_s` and `n_blur` counts.
 - **Demographics.** UZH records carry no `ethnicity` field (it was already not asked at UZH). Ethnic origin is specially protected personal data under the Swiss FADP and the Zurich IDG, and no analysis needs it. The age field's minimum is now 18, matching the consent.
+
+## Optional own answer before the AI (2026-11-15)
+
+- **Two buttons per trial.** "Answer on my own first" or "See the AI's recommendation first", replacing "Get Initial Recommendation". This reverses the earlier decision not to record an answer before the AI; the answer is optional and recorded only on the participant's own choice. The instructions page explains both buttons as equally fine. Fields: `ai_access_path`, `self_first_button_left`, `pre_ai.*`, `timestamps.path_chosen_at`, `timestamps.pre_ai_locked_at` (§3, §4.5). `answer_revisions` now covers only what happens after the recommendation (§4.1).
+- **Exports.** `trials.csv` gains `ai_access_path`, `self_first_button_left`, `path_chosen_at`, `pre_ai_locked_at`, `path_choice_s`, `own_attempt_s` and the `pre_ai_*` columns; `aggregates.json` gains `ai_access` (§8.10). Earlier records leave them blank.
+- **Not poolable with earlier records.** The trial page changed for everyone, so reliance on records from before this date (including the 2026-11-06 pilot) is not directly comparable. The remark above (2026-10-26) about comparisons "without inventing a pre-AI answer" still applies to `ai_first` trials and to earlier records.
+
+## Pre-survey reduced to 11 questions (2026-11-15)
+
+The pre-survey went from 25 rating questions and one free-text question on three pages to 11 rating questions on one page (`app/utils/pre_survey.py`). Names, wording and the 1–7 scale of the kept questions are unchanged, so they stay comparable with the UF study, whose code stores the raw answers without scoring them. The exceptions are the two reworded questions, `program_without_ai` and `hesitant_without_checking` (below).
+
+| Measure | Questions | `participants.csv` |
+|---|---|---|
+| Programming skill / confidence | `program_without_ai`, `code_comprehension`, `language_proficiency` | `pre_programming_skill_mean` |
+| Need for cognition (programming-specific, adapted; not the validated NCS) | `code_understanding`, `concept_understanding`, `complex_problems` | `pre_need_for_cognition_mean` |
+| Help-seeking preference (single question) | `self_solving` | `pre_self_solving` |
+| Trust in AI (mirrors the final survey's `trust_in_chatbot`) | `ai_dependability`, `ai_reliability`, `ai_explanation` | `pre_ai_trust_mean` |
+| Caution toward AI suggestions (single question; agreeing = more cautious) | `hesitant_without_checking` | `pre_hesitant_without_checking` |
+
+- **Removed:** `learn_languages`, `identify_improvements`, `solution_exploration`, the four concerns items (`ai_dependency`, `incorrect_advice`, `blind_trust`, `learning_hindrance`; `blind_trust` was re-added in new wording, below), `fundamental_concepts`, `data_structures`, `oop_principles`, `explain_concepts`, the four AI-literacy items (`ai_principles`, `ai_use_cases`, `ai_risks`, `ai_prompting`) and the free-text `ai_classroom_concerns`. Main reason besides length: the concerns items and `ai_risks` told participants, just before the task, that the AI might be wrong, which could lower overreliance on W trials and hint at the study's purpose. The others repeated kept questions, would be answered near the top of the scale by almost everyone (`fundamental_concepts`), or repeated the demographics page's AI-use questions.
+- **Scale means use the kept questions for every record**, so older records (which hold all 25) are averaged over the same questions as new ones. **`pre_need_for_cognition_mean` changed meaning:** it was the mean of five questions including `self_solving`; it is now the mean of three. The old five-question mean is `pre_need_for_cognition_5item_mean`.
+- **Reworded question.** "I am confident in my ability to program independently" (`independent_programming`) could mean without AI, without the internet or without other people. It became "I am confident in my ability to program without help from AI tools", stored under a new name, `program_without_ai`, so the two wordings are never mixed. It is not comparable with UF or pilot answers. For older records (which hold `independent_programming`), `pre_programming_skill_mean` is the mean of the two unchanged questions. An answer to the old wording still counts as a complete pre-survey (`pre_survey.REPLACED_ITEMS`), so a participant who answered before the change is not sent back to it; once the trials have started the survey is locked, and they could not continue otherwise.
+- **Re-added in new wording.** "I feel uncertain about blindly trusting AI's suggestions" (`blind_trust`) was hard to interpret: "uncertain" could mean undecided or doubtful, and almost everyone agrees with not trusting "blindly". It returned as "I am hesitant to rely on AI suggestions without checking them" under a new name, `hesitant_without_checking`, with the same direction (agreeing = more cautious). It belongs to no scale and is not reverse-coded into `pre_ai_trust_mean`. It is the last question, after the trust questions so it cannot colour them; as the last question before the task it may make participants more cautious and hint that the AI can be wrong, so consider this when interpreting W-trial reliance. Not comparable with UF or pilot `blind_trust` answers; the same completeness rule as above applies.
+- **Item-level columns.** Each of the 11 answers is exported as `pre_<name>`, so scale reliability (e.g. Cronbach's alpha) can be computed; `pre_independent_programming` and `pre_blind_trust` hold the old wordings for older records. Never pool them with `pre_program_without_ai` and `pre_hesitant_without_checking`.
+- **Retired scale means, older records only:** `pre_programming_self_efficacy_mean`, `pre_ai_concerns_mean`, `pre_need_for_cognition_5item_mean`, `pre_programming_literacy_mean`, `pre_ai_literacy_mean`. Each is computed only when all of its questions were answered, so they are blank for new records even where some of their questions are still asked. `ai_classroom_concerns` was never exported and still is not.
+
+## AI-experience answer options (2026-11-15)
+
+"How long have you been using AI tools?" (stored as `demographics.ai_usage`) keeps its wording; its options changed because the old list ended at "2+ years", which almost every participant now picks.
+
+| Until 2026-11-15 (code: label) | From 2026-11-15 (code: label) | `ai_usage_common` |
+|---|---|---|
+| `none`: No prior experience | `none`: No prior experience | `none` |
+| `novice`: Less than 6 months; `intermediate`: 6-12 months | `lt_1y`: Less than 1 year | `lt_1y` |
+| `experienced`: 1-2 years | `1_2y`: 1-2 years | `1_2y` |
+| `expert`: 2+ years | `2_3y`: 2-3 years; `gt_3y`: More than 3 years | `2plus` |
+
+`participants.csv` exports the stored code as `ai_usage` and both lists on shared bands as `ai_usage_common` (`app/utils/demographics.AI_EXPERIENCE_COMMON`), so new records can be compared with the pilot and UF. Use `ai_usage` itself only within one list. The coding-use checklist (`ai_use_type`) is unchanged and stays optional: an empty list means none ticked, which cannot be told apart from a skipped question.
+
+Two labels were clarified on the same day; the stored fields and options are unchanged. The UZH grade question reads "Grade average on your most recent Transcript of Records (Swiss scale, 6 = best)" instead of "Average grade so far", which could be read in several ways. "Major" became "Field of study (your major, or your PhD or other program)", so it applies to PhD students and "Other"; it is still stored as `major_category`. "Minor (if applicable)" stays optional.
+
+## Pages after the final survey (2026-11-19, redesigned the same day)
+
+After the final survey every participant follows one path, with a progress
+indicator (questions and surveys → about the study → your results):
+
+1. **Study explanation and choice.** UZH: `/completion`; other sites:
+   `/debrief` (same page, `completion.html`; a UZH visit to `/debrief` is
+   sent to `/completion`). From top to bottom: the optional prize draw (see
+   below); the study explanation and the three kinds of first
+   recommendation; a request to keep this to themselves; **May we use your
+   responses?** with the withdrawal code (copy button, withdrawal page); the
+   main button **Yes, use my responses and see my results**; and below it a
+   small link, "I don't want my responses to be used", that unfolds a
+   confirmation box with **Withdraw my responses**. Withdrawing therefore
+   takes two deliberate clicks and cannot happen by accident. The choice
+   writes `participants.data_use`, `participants.data_use_decided_at` and
+   `users.data_use`. Re-saving the same choice keeps the original decision
+   time; withdrawal remains irreversible through the participant UI. A
+   participant who already withdrew sees that status instead of the buttons.
+2. **Results** (`/results`), only after a keep/withdraw choice at every site
+   (otherwise redirected to step 1). Shown whatever the choice.
+3. **Finish** → `/thank_you`: the end of the study ("You can now close this
+   tab"), with the withdrawal page link.
+
+The order is deliberate. Earlier on 2026-11-19, UZH's `/completion` offered
+the explanation and the results as two equal links. Participants could then
+see their score and leave without the debrief or their withdrawal code, and
+their record stayed `pending`, which the export skips. The score could also
+influence the choice (for example, people misled by the AI withdrawing more
+often). Now the choice is made before the score is shown, and nobody reaches
+the results without the explanation and the code. A participant who closes
+the tab on step 1 still stays `pending` and is excluded from exports.
+Returning browsers (`already_completed.html`) link back to step 1.
+
+### Prize draw (2026-11-19)
+
+At the top of step 1, participants may leave an email address for the prize
+draw (optional; `PRIZE_DRAW_ENABLED=0` hides it and the matching consent
+sentence). **Join the draw** (also what Enter does in the field) saves only
+the email and returns to the page with a confirmation; an email typed there
+is also saved when the participant presses either choice button. Joining
+does not depend on the keep/withdraw choice, and an invalid address saves
+nothing (neither the email nor the choice).
+
+Storage (`app/utils/prize_draw.py`): the lower-cased email goes to its own
+collection, `prize_draw_entries`, as `{_id: random token, email, site}`:
+no participant_id and no timestamp (a random `_id` instead of an ObjectId,
+which would carry the insertion time). The participant record only gets
+`prize_draw_entered: True`, so the page can confirm the entry and each
+participant enters once; the same email is stored only once. Research
+exports never read the collection. The collection's storage order could in
+principle hint at the order of entries, so the consent text promises only
+that the email is stored separately, used only to contact the winners and
+deleted after the draw. Delete `prize_draw_entries` after the draw. The
+UZH consent page now mentions the optional email; the place for the prize
+and draw date is marked in `completion.html`.
+
+## Results page (2026-11-15; layout updated 2026-11-19)
+
+Participants see `/results`: their score (correct answers out of 14, with one numbered square per question that opens it in the list) and, per question in presentation order, a collapsible entry with the code, their answer and, when wrong, the correct answer. Results are shown whatever the keep/withdraw choice, which is required first (see above). Nothing is recorded on this page, so it does not change any measure. The page asks participants not to save, copy or share the questions or answers and invites them to share the study link (and their score if they like); copying, the context menu and printing are blocked for the answer list (`style.css`, `static/js/end_pages.js`), but screenshots cannot be prevented. Answers can therefore reach students who have not taken part yet more easily than before; the final survey's `assistant_observations` answers may show participants who arrived knowing the answers or that the assistant was sometimes wrong. `DEBRIEF_SHOW_ANSWERS` no longer exists.
+
+## UZH fixed14 v1 pilot inspection (2026-11-19)
+
+New UZH assignments have `sequence_design_version="uzh_fixed14_v1"` and
+`sequence_label="UZH14"`. The exact positional sequence is:
+
+```
+Position:  1 2 3 4 | 5 6 7 8 9 10 | 11 12 13 14
+Type:      C C C W | I C C C C  I |  C  C  C  W
+```
+
+All 14 distinct question IDs are shuffled once per participant, independently
+of this fixed response schedule. Stored assignments, including partially
+completed P/Q sessions, are reused without modification. UF keeps P/Q.
+`section` uses 1–4 / 5–10 / 11–14 for this design only. No section or response
+type labels are shown in the participant interface.
+
+`is_uzh_wrong_probe` identifies positions 4 and 14 under this version.
+`is_primary_pq_probe` retains its historical meaning: P/Q position 4 only.
+It is false throughout the new design. Analyse versions separately; the
+new pair is a within-session comparison and must not be labelled as the old
+P/Q contrast. The IDK encounter numbers are 1 and 2 (positions 5 and 10).
+
+### Database and CSV fields to inspect
+
+| Source | Fields / interpretation |
+|---|---|
+| `participant_assignments` | `sequence_design_version`, `sequence_label`, `type_at_position`, `problem_at_position` (zero-based question indices), `variant_assignments`, `seed`, `option_orders`; immutable assignment |
+| `trial_starts` | `participant_id`, `position` (zero-based), `served_at`, `path`, `path_chosen_at`, `pre_ai_answer`, `pre_ai_abandoned`, `pre_ai_locked_at`, `question_displayed_at`, `question_display_ack_at`, `ai_visible_at`, `ai_visible_ack_at`; each choice/visibility field is first-write-wins |
+| `trials.answer` → `trials.csv` | `sequence_design_version`, `problem_id`, `position` (one-based), `trial_type`, `is_uzh_wrong_probe`, `is_primary_pq_probe` |
+| `trials.answer` → `trials.csv` | `first_route`, `ai_access_path`, `initial_option_id`, `ai_endorsed_option_id`, `correct_option_id`, `final_option_id`, `option_ids` (ID-to-text map, JSON in CSV) |
+| `trials.answer.pre_ai` → CSV | `answer` → `pre_ai_answer`, `is_correct` → `pre_ai_is_correct`, `agreed_with_ai` → `pre_ai_agreed_with_ai`, `switched_after_ai` → `pre_ai_switched_after_ai`, `switched_to_ai` → `pre_ai_switched_to_ai` |
+| `trials.answer.timestamps` → same-named CSV columns | `served_at`, `question_displayed_at`, `question_display_ack_at`, `path_chosen_at`, `pre_ai_locked_at`, `ai_requested_at`, `ai_visible_at`, `ai_visible_ack_at`, `final_submit_at` |
+| `trials.rating.helpfulness` → CSV | `post_helpfulness`: original strings `1` through `7`, or `not_needed`, never numeric 8 |
+| `chat_turns` → `chat_messages.csv` | `entry_type`, `request_id`, `sent_at`, `received_before_submission`, `response_status`, `timestamp`, `after_answer`, `user_message`, `assistant_message`, `is_error`, `error_reason`, `raw_completion`, `policy_filter_reason` |
+
+Stable option IDs are the question ID plus the first 16 hex characters of
+SHA-256 of the canonical option text. They do not depend on display place.
+Option text fields and existing place fields remain unchanged. IDK has both
+`ai_endorsed_answer=null` and `ai_endorsed_option_id=null` (empty CSV cells).
+The saved initial answer is **`pre_ai.answer` / `pre_ai_answer`**, with stable
+ID `initial_option_id`. The older `answer_revisions.initial_answer` / CSV
+`initial_answer` keeps its historical revision-baseline semantics; on AI-first
+trials it can be the first selection made *after* advice. Do not use that
+older column as evidence of a pre-AI answer.
+
+| Participant path | `first_route` / `trial_starts.path` | `ai_access_path` | Saved pre-AI answer / `initial_option_id` |
+|---|---|---|---|
+| AI first | `ai_first` | `ai_first` | null |
+| Own first, saved an option | `self_first` | `self_first` | selected option / stable ID |
+| Own first, requested AI with no option | `self_first` | `self_first_abandoned` | null |
+
+The own-answer step has one action button. With no selection it requests
+advice without saving an answer; with a selection it saves the current
+option before returning advice. The initial option never changes when the
+final selection changes. Existing historical `pre_ai.unsaved_selection`
+values are preserved; the new UI does not abandon a selected option.
+
+### Timing and pending chat
+
+`served_at` is the server's first page/start time, not proof of display.
+`question_displayed_at` and `ai_visible_at` are browser timestamps reported
+when the tab is visible and the relevant content has been rendered.
+`question_display_ack_at` and `ai_visible_ack_at` are the server's receipt
+of those acknowledgements. Browser clocks can differ from server clocks;
+use matching clocks for durations and retain both. Visibility acknowledges
+rendering, not attention or comprehension. A refresh may provide the first
+acknowledgement if a previous response was lost. Missing acknowledgements
+remain null rather than being inferred from requests. `ai_requested_at`
+(and the mandatory turn's original `timestamp`) is the request time and
+must never be substituted for `ai_visible_at`. UZH displays the full initial
+recommendation after the existing random wait, then acknowledges it; it
+does not delay the acknowledgement until a typewriter animation finishes.
+
+Voluntary UZH messages are inserted into `chat_turns` **before** the model
+call, with their original text, server `sent_at`, unique `request_id`,
+`response_status="pending"`, and `received_before_submission`. Completion
+updates that same document to `completed` or `failed`. If a process stops
+mid-request, the pending message remains available and is not counted as a
+successful reply. `timestamp` remains the response-finish time (null while
+pending); `after_answer` keeps its old response-completion meaning.
+Consequently `received_before_submission=true` and `after_answer=true` can
+both hold: the voluntary request arrived before submission but finished
+afterward. Do not use `after_answer` to exclude those messages from analysis
+of voluntary answer seeking. `entry_type="initial_recommendation_request"`
+(and database `is_initial_recommendation=true`) marks the mandatory synthetic
+exchange; `entry_type="followup"` marks voluntary messages.
+
+The existing `n_followup_turns` excludes failed, pending and late completions;
+`n_messages_sent` includes every accepted voluntary request. The command-line
+export rebuilds transcripts from `chat_turns`, including replies that arrive
+after the `users` completion snapshot. Use the exporter rather than reading
+only `users.answers[].chat`. Incomplete participants remain in `attrition.csv`;
+the existing research export includes completed, retained participants.
+
+### Pilot walkthrough and configuration
+
+1. Set `STUDY_PUBLIC_URL=https://<public-study-host>/` (or its `/start/uzh`
+   entry URL). Query strings, fragments, results and resume paths are rejected.
+   Missing/invalid configuration hides sharing and logs a configuration warning.
+   Local `.env` had no public URL at implementation time.
+2. Start a fresh UZH participant and exercise each route above. In the own-first
+   route, change the selection before saving, then change it after reveal.
+   Refresh before/after reveal and retry a deliberately interrupted request;
+   inspect the saved route/initial option and a single mandatory chat turn.
+3. At positions 5 and 10, ask the configured live model for the final answer,
+   ask it to confirm an option, and repeat the request. It should abstain.
+   Then ask “What does next() do in general?” It may explain the concept
+   without tracing this question or identifying/eliminating options. Automated
+   tests verify policy selection and output filtering with mocked responses;
+   live semantic adherence still needs this check (also see IDK_MANUAL_EVAL.md).
+4. On the rating page, check keyboard navigation and the bold nonnumeric
+   helpfulness response beside the scale (stacked immediately below it on
+   smaller screens), separated by a divider. After the final survey verify
+   the study explanation, withdrawal code, non-sharing reminder and that the
+   results open only after the keep/withdraw choice; then the score,
+   per-item review and the final page. Copy the study link and open it in a private window: it must open
+   public entry, without any participant-specific result or resume token.
+5. Run `python scripts/export_data.py --design uzh_fixed14_v1 --output-dir <pilot-export>`
+   against the intended pilot database after choosing keep. Check the columns
+   above. Check P/Q resumes separately using their original design filter.
+
+Optional Chromium regressions are in `tests/test_uzh_browser.py`. Install
+Playwright and Chromium (`python -m pip install playwright`,
+`python -m playwright install chromium`), or set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an installed Chromium executable. The
+browser tests bridge HTTP to Flask's test client and use the in-memory
+MongoDB replacement; they never call the live model or research database.

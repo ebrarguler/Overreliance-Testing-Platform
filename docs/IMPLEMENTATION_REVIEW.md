@@ -25,7 +25,7 @@ Fourteen drafted C/W recommendations were shortened to approximately the origina
 ### Surveys, consent and debrief
 
 - Added per-trial perceived difficulty.
-- Trust offers the full numeric 1–7 agreement scale, plus “I didn't need AI assistance” as a separate option stored as `not_needed`. This category describes perceived need, not distrust or lack of exposure, and is excluded from numeric trust scores. Earlier versions offered only numeric 2–7 alongside this category; existing responses are unchanged.
+- Trust and helpfulness offer the full numeric 1–7 agreement scale. Since 2026-11-15 helpfulness alone also offers “I didn't need AI assistance” (stored as `not_needed`), after “Strongly agree”, behind a divider and not highlighted, so it is not read as a point below “Strongly disagree”. This category describes perceived need, not distrust or lack of exposure, and is excluded from numeric scores. Trust no longer offers it, since every participant sees the recommendation and the opt-out dropped the most informative trust ratings. Earlier versions offered it for trust (initially alongside numeric 2–7), then for trust and helpfulness, highlighted beside “Strongly disagree”; existing responses are unchanged.
 - Final items explicitly concern this assistant. (Separate assistant/ChatGPT trust items with a `not_used` category for ChatGPT were added here and removed on 2026-11-05.)
 - Study-purpose, unusual-behavior, and external-tool questions precede disclosure. (On 2026-11-05 only the unusual-behavior question was kept.)
 - Debrief explains the scripted recommendations and uncertainty condition, gives correct answers in presentation order, and asks keep/withdraw.
@@ -88,6 +88,34 @@ Still open from the review (need a decision, human work or a live evaluation): p
 - The final survey was shortened to 21 questions. Part 1: the 17 original statements and "Did you notice anything unusual about the assistant's answers?". Part 2, shown only after part 1 is complete: "After the assistant said it was not sure about an answer, I became more skeptical of its answers to other questions" and "After the assistant said it was not sure about an answer, I trusted its answers to other questions more" (both 1–7), then the open question on how use changed. Removed: the assistant and ChatGPT trust items, the study-purpose question and the other-tools question (outside-tool use is now seen only through tab-hidden/focus-loss counts).
 - UZH demographic records no longer carry an empty `ethnicity` field; age must be at least 18 (matching the consent).
 
+## Optional own answer before the AI — 2026-11-15
+
+- Each trial opens with the options locked and two equal buttons, "Answer on my own first" and "See the AI's recommendation first" (side random per participant, fixed across trials). Own-first unlocks the options; "Save my answer and see the AI's recommendation" stores the answer on the server before the recommendation is returned, and "I'm not sure – show me the AI's recommendation" records `self_first_abandoned`. The answer can still only be submitted after the recommendation. The chat stays closed until then and is never told the own answer. This reverses the 2026-10 decision not to record an answer before the AI.
+- New `POST /choose_path`; `/get_initial_recommendation` also accepts POST with the own answer. Path and own answer live on the `trial_starts` document, first write wins; a reload returns to the same step.
+- Trial records gain `ai_access_path`, `self_first_button_left`, `pre_ai.*` and two timestamps; `trials.csv` and `aggregates.json` (`ai_access`) export them. `answer_revisions` now covers only changes after the recommendation. See `docs/MEASURES.md` §4.5 and §8.10. The path is self-selected, so it is analysed as behaviour, not as a manipulation.
+- Instructions page step 1 explains both buttons as equally fine.
+- 403 automated tests pass (20 new in `tests/test_ai_access.py`). Clicked through all three paths in the local app (throwaway MongoDB) and checked the stored records, a reload during the own-answer step, and phone width.
+
+## Pre-survey reduced to 11 questions — 2026-11-15
+
+- 25 rating questions and one free-text question on three pages became 11 rating questions on one page, with unchanged names and wording except two reworded ones: programming skill (3), need for cognition (3), the single help-seeking question `self_solving`, trust in AI (3), and the single caution question `hesitant_without_checking`. The removed concerns and AI-risk questions told participants just before the task that the AI might be wrong. The UF code stores these answers without scoring them, so no UF analysis depends on the removed ones.
+- `participants.csv`: three current scale means computed over the kept questions for every record (`pre_need_for_cognition_mean` is now three questions; the old five-question mean is `pre_need_for_cognition_5item_mean`), the 11 answers as `pre_<name>`, and the 25-question scale means for older records only. See `docs/MEASURES.md`.
+- "I am confident in my ability to program independently" became "...without help from AI tools", under a new name (`program_without_ai`), because "independently" could be read several ways. For older records the programming-skill mean uses the two unchanged questions.
+- "I feel uncertain about blindly trusting AI's suggestions" was re-added as "I am hesitant to rely on AI suggestions without checking them" (`hesitant_without_checking`, a single question in no scale), last on the page after the trust questions. It may make participants more cautious on the task; see `docs/MEASURES.md`.
+- Answers already given to the 25-question version count as complete, including the old wording of the reworded question, so nobody is sent back to the survey or stuck mid-quiz; old `/pre_survey/2` and `/3` links return to the survey.
+- The pre-survey now uses the same rating layout as the post-trial and final surveys (`_likert_item.html`, which shows saved answers as selected). Its old layout overflowed on phones, hiding "Agree" and "Strongly agree"; it is now a vertical list there. 433 automated tests pass.
+
+## Demographics wording and options — 2026-11-15
+
+- "How long have you been using AI tools?" now offers No prior experience / Less than 1 year / 1-2 years / 2-3 years / More than 3 years instead of ending at "2+ years". Changed bands use new codes; `participants.csv` adds `ai_usage_common`, which maps old and new answers onto shared bands (see `docs/MEASURES.md`). The coding-use checklist is unchanged.
+- The UZH grade question now asks for the "Grade average on your most recent Transcript of Records"; "Major" is now "Field of study" (for PhD students and "Other" too), still stored as `major_category`; the minor stays optional. 429 automated tests pass.
+
+## Results page — 2026-11-15
+
+- After the keep/withdraw choice, participants see their score and each question with their answer and, when wrong, the correct answer (`/results`), then the thank-you page. The debrief no longer lists answers, and `DEBRIEF_SHOW_ANSWERS` was removed.
+- The page asks participants not to save or share the questions or answers, blocks copying, the context menu and printing for the answer list (screenshots cannot be prevented), and offers the study link with a copy button (`STUDY_PUBLIC_URL` optional). Answers may spread to future participants more easily than before.
+- 438 automated tests pass.
+
 ## Useful commands
 
 ```sh
@@ -100,3 +128,68 @@ Still open from the review (need a decision, human work or a live evaluation): p
 ```
 
 Official model reference: https://developers.openai.com/api/docs/models/gpt-5.6-luna
+
+## UZH fixed 14-trial update — 2026-11-19
+
+Local changes on `uzh-idk-draft-variants`; no commit, push or deployment.
+The pre-existing results/debrief edits and unrelated local files were preserved.
+
+- New UZH sessions use `uzh_fixed14_v1` / `UZH14`, with
+  `C C C W | I C C C C I | C C C W`. Question and option randomization reuse
+  the existing seeded allocator. UF retains P/Q; existing UZH assignments,
+  including partial P/Q runs, are not rewritten. `is_uzh_wrong_probe` marks
+  positions 4 and 14 without repurposing `is_primary_pq_probe`.
+- UZH own-first uses one enabled action, switching text based on the current
+  selection. Existing write-once route/initial-answer storage and unique
+  recommendation records are reused for refreshes, racing requests and retries.
+- Added stable option IDs and first-route export fields. Browser display and
+  recommendation-visibility acknowledgements are separate from server request
+  timestamps. Existing field meanings, including the revision-baseline
+  `initial_answer`, are retained; use `pre_ai_answer` / `initial_option_id`
+  for the saved pre-AI answer.
+- UZH voluntary chat requests are saved before waiting for the model. The same
+  document is completed or failed afterward; pending text survives a lost
+  worker. `sent_at` and `received_before_submission` distinguish a voluntary
+  request from a reply that finishes after submission. Export reassembles
+  durable transcripts rather than trusting the final `users` snapshot.
+- Helpfulness keeps the original 1–7 agreement scale. Its `not_needed` radio
+  is bold beside the scale behind a divider (stacked on smaller screens) and remains in the same accessible group.
+- Results keep the score, review and non-sharing reminder; the debrief and
+  withdrawal flow remain intact. UZH only shares an explicitly configured
+  public entry URL. `STUDY_PUBLIC_URL` was missing locally, so sharing stays
+  hidden until configured. No email/prize-draw collection was added.
+- Pages after the final survey redesigned (same day): one path at every site,
+  study explanation + keep/withdraw choice + withdrawal code → results →
+  final page, with a progress indicator. The earlier two-link UZH completion
+  page let participants see results and leave without the debrief, the code
+  or a choice (record stays `pending`, skipped by the export), and showed the
+  score before the choice. `debrief.html` is gone; `/debrief` renders the
+  same page for other sites. See MEASURES.md "Pages after the final survey".
+- Same day, second pass: optional prize-draw email at the top of that page,
+  stored in `prize_draw_entries` without participant_id or timestamp
+  (`PRIZE_DRAW_ENABLED`, on by default; UZH consent mentions it). The
+  withdraw option is no longer an equal choice: one main button allows use,
+  and withdrawing sits behind a small link plus a confirmation box.
+  Suite: 479 passing; the 9 Chromium cases (5 earlier + 4 for these pages)
+  pass with `PLAYWRIGHT_CHROMIUM_EXECUTABLE` set to the installed
+  Chromium-1234 (Playwright 1.65 expects a newer build that is not installed).
+
+Validation: the existing baseline had 438 passing tests. The updated non-browser
+suite has **467 passing tests**, with five optional browser cases skipped when
+Chromium is unavailable. The **five Chromium cases pass separately** using an
+installed browser: AI first, own-first with a saved answer, own-first without
+an answer, a lost-response retry, and stale-tab route recovery. They check changing a selection, refresh,
+final edits, a single stored mandatory turn, export agreement and the separated
+rating control, including keyboard selection and a mobile viewport. The pytest
+suite uses a fake MongoDB and mocked model calls; browser HTTP is bridged to
+Flask's test client. The existing `scripts/verify_local_mongo.py` check also
+passes against an isolated temporary local MongoDB: real unique indexes, a
+threaded answer/chat race, no stale Flask-Session write, and lost-session
+recovery. It does not use the configured research database.
+`git diff --check` passes.
+
+Live-model semantic abstention, production MongoDB/Flask-Session behavior, and
+the eventual public hosting URL still require a pilot check. No live-model or
+research-database calls were made for this update. Exact database/CSV fields,
+timing caveats, the browser-test command and a manual pilot walkthrough are in
+[the UZH pilot inspection section](MEASURES.md#uzh-fixed14-v1-pilot-inspection-2026-11-19).

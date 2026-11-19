@@ -109,8 +109,11 @@ def _run_study(client):
             assert term not in html, f"{term!r} shown to participant at position {position}"
         # A refresh shows the same question.
         assert client.get("/quiz").get_data(as_text=True) == html
+        from datetime import datetime, timezone
+        trial_post(client, "/trial_visible", json={"event": "question", "visible_at": datetime.now(timezone.utc).isoformat()})
 
         rec = trial_get(client, "/get_initial_recommendation").get_json()
+        trial_post(client, "/trial_visible", json={"event": "recommendation", "visible_at": datetime.now(timezone.utc).isoformat()})
         if variant == I:
             # The participant's next IDK wording, in their own order.
             assert rec["recommendation"] == IDK_ABSTENTIONS[next(idk_wordings)]
@@ -144,12 +147,14 @@ def _run_study(client):
 
 @pytest.mark.parametrize("forced_label", ["P", "Q"])
 def test_full_route_storage_export_path(client, db, tmp_path, monkeypatch, forced_label):
-    class ForceLabel:  # the first assignment is a P/Q tie; pick each in turn
-        def choice(self, options):
-            return forced_label
-
-    monkeypatch.setattr(assignment_module, "_tie_break_rng", ForceLabel())
     _consent(client)
+    record = db["participant_assignments"].docs[0]
+    seq = SEQUENCES[SEQUENCE_LABELS.index(forced_label)]
+    record.update(sequence_design_version="blocks_pq_v1", sequence_label=forced_label,
+                  type_at_position=seq,
+                  variant_assignments={str(q): t for q, t in zip(record["problem_at_position"], seq)})
+    client.delete_cookie("session")
+    client.get("/")
     state = _session(client)
     label = state["sequence_label"]
     assert label == forced_label
@@ -291,8 +296,7 @@ def test_assignment_and_mapping_survive_refresh_and_resume(client, db):
     assert {k: _session(client)[k] for k in keys} == {k: first[k] for k in keys}
 
     assert len(db["participant_assignments"].docs) == 1
-    counts = [d["count"] for d in db["sequence_counts"].docs]
-    assert sum(counts) == 1
+    assert not db.get_collection("sequence_counts").docs
 
 
 def test_legacy_participant_resumes_with_their_saved_design(client, db):
@@ -421,7 +425,7 @@ def test_legacy_records_export_unchanged_and_are_not_pooled(client, db, tmp_path
 
     with open(tmp_path / "participants.csv") as f:
         p_rows = list(csv.DictReader(f))
-    assert [r["design_group"] for r in p_rows] == ["legacy_unversioned", "blocks_pq_v1"]
+    assert [r["design_group"] for r in p_rows] == ["legacy_unversioned", "uzh_fixed14_v1"]
     assert p_rows[0]["sequence_design_version"] == ""
     assert p_rows[0]["type_at_position"] == "" and p_rows[0]["rotation_seed"] == ""
 
@@ -443,18 +447,18 @@ def test_legacy_records_export_unchanged_and_are_not_pooled(client, db, tmp_path
     assert {r["entry_type"] for r in chat} == {"initial_recommendation_request"}
 
     aggregates = json.loads((tmp_path / "aggregates.json").read_text())
-    assert sorted(aggregates) == ["blocks_pq_v1", "legacy_unversioned"]
+    assert sorted(aggregates) == ["legacy_unversioned", "uzh_fixed14_v1"]
     assert "option6_primary_probes" not in aggregates["legacy_unversioned"]
     assert "pq_primary_probe" not in aggregates["legacy_unversioned"]
     assert aggregates["legacy_unversioned"]["by_trial_type"]["idk"]["n_trials"] == 3
-    assert aggregates["blocks_pq_v1"]["by_trial_type"]["idk"]["n_trials"] == 3
+    assert aggregates["uzh_fixed14_v1"]["by_trial_type"]["idk"]["n_trials"] == 2
 
     # Selecting one design leaves the other out of every file.
     only = tmp_path / "only"
-    summary = write_exports([legacy, copy.deepcopy(new_doc)], only, design="blocks_pq_v1")
+    summary = write_exports([legacy, copy.deepcopy(new_doc)], only, design="uzh_fixed14_v1")
     assert summary["n_exported"] == 1 and summary["n_other_design"] == 1
     with open(only / "trials.csv") as f:
-        assert {r["design_group"] for r in csv.DictReader(f)} == {"blocks_pq_v1"}
+        assert {r["design_group"] for r in csv.DictReader(f)} == {"uzh_fixed14_v1"}
     with open(only / "participants.csv") as f:
         # Participant numbering is the same as in the unfiltered export.
         assert [r["participant_id"] for r in csv.DictReader(f)] == ["2"]

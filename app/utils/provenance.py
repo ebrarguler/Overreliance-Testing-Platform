@@ -27,6 +27,13 @@ def prompt_hash(prompt):
     return hashlib.sha256(prompt.encode()).hexdigest()
 
 
+def option_id(question, option):
+    """Content identity, independent of randomized display order; null for IDK."""
+    if option is None or option not in question["options"]:
+        return None
+    return f"{question['id']}:{hashlib.sha256(option.encode()).hexdigest()[:16]}"
+
+
 def _forms(option, printed_forms):
     """The option text plus any other way the program prints it (e.g. the
     option "4, 3" is printed as `4 3`)."""

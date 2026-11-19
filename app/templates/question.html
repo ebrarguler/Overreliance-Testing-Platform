@@ -74,7 +74,7 @@
 
   {# How the participant reaches the AI's recommendation: see
      app/utils/ai_access.py. Only the panel of the current step is shown. #}
-  <div class="ai-access" id="ai-access">
+  <div class="ai-access{% if is_uzh %} ai-access-uzh{% endif %}" id="ai-access">
     <div class="access-step" id="step-choose" hidden>
       <p class="access-prompt">How would you like to start?</p>
       <div class="path-buttons">
@@ -89,10 +89,21 @@
     </div>
 
     <div class="access-step" id="step-own" hidden>
-      <p class="access-prompt">
+      <p class="access-prompt{% if is_uzh %} own-answer-guidance{% endif %}">
+        {% if is_uzh %}
+        <span class="access-guidance-line"><strong>Have an answer?</strong> Select it above, then save it using the button below.</span>
+        <span class="access-guidance-line"><strong>Not sure?</strong> Use the button below without selecting an answer.</span>
+        {% else %}
         Choose your answer above, then save it to see the AI's recommendation.
         You can still change your answer after that.
+        {% endif %}
       </p>
+      {% if is_uzh %}
+      <button type="button" class="btn" id="save-and-see-ai">
+        I’m not sure — show me the AI’s recommendation.
+      </button>
+      <p class="access-note">You can change your final answer after seeing the AI's recommendation.</p>
+      {% else %}
       <button type="button" class="btn" id="save-and-see-ai" disabled>
         Save my answer and see the AI's recommendation
       </button>
@@ -101,6 +112,7 @@
           I'm not sure – show me the AI's recommendation
         </button>
       </p>
+      {% endif %}
     </div>
 
     <div class="access-step" id="step-pending" hidden>
@@ -158,6 +170,8 @@
 
 <script>
   const position = {{ question_number - 1 }};
+  const isUzh = {{ is_uzh | tojson }};
+  let visibilityReady = false;
   let isSending = false;
   window.addEventListener("pageshow", (event) => { if (event.persisted) window.location.reload(); });
   // True when the server already served this trial's recommendation, e.g.
@@ -209,7 +223,15 @@
   }
 
   function updateSaveState() {
+    {% if is_uzh %}
+    const button = document.getElementById("save-and-see-ai");
+    button.disabled = recommendationPending;
+    button.textContent = selectedAnswer() === null
+      ? "I’m not sure — show me the AI’s recommendation."
+      : "Save my answer and show the AI’s recommendation.";
+    {% else %}
     document.getElementById("save-and-see-ai").disabled = selectedAnswer() === null;
+    {% endif %}
   }
 
   // Keep the saved answer selected once the AI has answered. Deliberately
@@ -228,6 +250,7 @@
   }
 
   function unlockAfterRecommendation() {
+    visibilityReady = true;
     recommendationReceived = true;
     showAccessStep("advice");
     document.getElementById("user-message").disabled = false;
@@ -243,7 +266,7 @@
   // without saying why.
   function updateSubmitState() {
     const answered = document.querySelector('input[name="answer"]:checked') !== null;
-    document.getElementById("submit-answer").disabled = !(recommendationReceived && answered && !isSending);
+    document.getElementById("submit-answer").disabled = !(recommendationReceived && answered && !isSending && (!isUzh || visibilityReady));
   }
 
   // --- Trial instrumentation: first interaction, answer revisions -----------
@@ -351,13 +374,21 @@
     chatHistory.scrollTop = chatHistory.scrollHeight;
   }
   // Render any Markdown carried over from earlier turns, then scroll.
-  window.onload = () => {
+  window.onload = async () => {
     renderRestoredHistory();
     if (recommendationReceived) {
-      unlockAfterRecommendation();
       if (preAiAnswer !== null) markPreAiAnswer(preAiAnswer);
     } else {
       showAccessStep(accessStep);
+    }
+    try {
+      await acknowledgeVisibility("question");
+      if (recommendationReceived) {
+        await acknowledgeVisibility("recommendation");
+        unlockAfterRecommendation();
+      }
+    } catch (error) {
+      showAccessError("The page could not save its progress. Please refresh to continue.");
     }
     updateSubmitState();
     scrollToBottom();
@@ -461,7 +492,7 @@
     });
   }
 
-  async function addMessageWithTyping(message, isUser = false) {
+  async function addMessageWithTyping(message, isUser = false, immediate = false) {
     const chatHistory = document.getElementById("chat-messages");
     const messageDiv = document.createElement("div");
     messageDiv.className = `chat-message ${
@@ -477,7 +508,8 @@
     chatHistory.appendChild(messageDiv);
     scrollToBottom();
 
-    await typeWriter(body, message);
+    if (immediate) body.textContent = message;
+    else await typeWriter(body, message);
     if (!isUser) {
       // Swap the typed plain text for its rendered form once the animation is
       // done, so Markdown resolves without ever animating raw markup.
@@ -515,6 +547,33 @@
     "Content-Type": "application/json",
     "X-CSRF-Token": {{ csrf_token() | tojson }},
   };
+
+  // Browser-reported visibility, distinct from the server serving/requesting
+  // the text. A hidden tab waits until visible, including on refresh.
+  const visibilityTimes = {};
+  async function acknowledgeVisibility(event) {
+    if (!isUzh) return;
+    while (document.visibilityState !== "visible") {
+      await new Promise(resolve => document.addEventListener("visibilitychange", resolve, { once: true }));
+    }
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    visibilityTimes[event] ??= new Date().toISOString();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch("/trial_visible", {
+          method: "POST", headers: CSRF_HEADERS,
+          body: JSON.stringify({ position, event, visible_at: visibilityTimes[event] }),
+        });
+        if (response.status === 409) { window.location.reload(); throw new Error("Stale page"); }
+        if (!response.ok) throw new Error("Progress not saved");
+        return;
+      } catch (error) {
+        if (attempt === 2) throw error;
+        await sleep(500);
+      }
+    }
+  }
+  let recommendationBubbleShown = recommendationReceived;
 
   function setAccessButtonsDisabled(disabled) {
     document
@@ -581,6 +640,12 @@
       });
       if (response.status === 409) { window.location.reload(); return; }
       const data = await response.json();
+      if (response.status === 400 && accessStep !== "own") {
+        // Another tab may have chosen own-first before this AI-first click.
+        // Restore that route instead of retrying forever without an answer.
+        window.location.reload();
+        return;
+      }
       if (response.status === 400 && accessStep === "own") {
         // No valid answer saved: back to choosing one.
         indicator.remove();
@@ -595,7 +660,12 @@
       indicator.remove();
       indicator = null;
       document.getElementById("recommendation_delay_ms").value = String(Math.round(Date.now() - requestedAt));
-      await addMessageWithTyping(data.recommendation, false);
+      if (!recommendationBubbleShown) {
+        await addMessageWithTyping(data.recommendation, false, isUzh);
+        recommendationBubbleShown = true;
+      }
+      await acknowledgeVisibility("question");
+      await acknowledgeVisibility("recommendation");
 
       unlockAfterRecommendation();
       preAiAnswer = data.pre_ai_answer ?? null;
@@ -617,6 +687,7 @@
       showAccessError("The recommendation didn't load. Please try again.");
     } finally {
       recommendationPending = false;
+      if (accessStep === "own") updateSaveState();
     }
   }
 
@@ -626,9 +697,14 @@
     .addEventListener("click", () => requestRecommendation({}));
   document.getElementById("save-and-see-ai").addEventListener("click", () => {
     const answer = selectedAnswer();
+    {% if is_uzh %}
+    requestRecommendation({ abandoned: answer === null, pre_ai_answer: answer, pre_ai_n_changes: preAiChanges });
+    {% else %}
     if (answer === null) return;
     requestRecommendation({ pre_ai_answer: answer, pre_ai_n_changes: preAiChanges });
+    {% endif %}
   });
+  {% if not is_uzh %}
   document.getElementById("skip-to-ai").addEventListener("click", () => {
     requestRecommendation({
       abandoned: true,
@@ -636,6 +712,7 @@
       pre_ai_n_changes: preAiChanges,
     });
   });
+  {% endif %}
   document
     .getElementById("see-ai")
     .addEventListener("click", () => requestRecommendation(retryParams));

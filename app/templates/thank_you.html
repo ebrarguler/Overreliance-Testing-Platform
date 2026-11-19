@@ -1,14 +1,19 @@
-{% extends "base.html" %} {% block content %}
-<div class="container">
-	<h2>Thank You!</h2>
-	<p class="center">
-		Thank you for completing the quiz and surveys. Your responses have been
-		recorded.
-	</p>
-	<div class="center">
-		<a href="{{ url_for('main.index') }}" class="btn btn-accept"
-			>Back to Home</a
-		>
-	</div>
+{% extends "base.html" %}{% block content %}
+{# The end of the study: reached with "Finish" on the results page. #}
+<div class="end-page end-final">
+  <header class="end-hero">
+    <div class="end-hero-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+    </div>
+    <h2>All done. Thank you!</h2>
+    <p>Your participation helps us understand how students work with AI assistants.</p>
+    <p class="end-close-note">You can now close this tab.</p>
+  </header>
+
+  <p class="end-muted end-center">Want to remove your responses later? Use your withdrawal code on the <a href="{{ url_for('main.withdraw') }}">withdrawal page</a>.</p>
+
+  <footer class="end-contact">
+    <p>{{ research_note|urlize }}</p>
+  </footer>
 </div>
 {% endblock %}

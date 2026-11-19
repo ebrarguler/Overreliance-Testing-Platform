@@ -4,6 +4,7 @@ import time
 import datetime
 import logging
 import secrets
+from urllib.parse import urlsplit
 from flask import (
     Blueprint,
     render_template,
@@ -15,7 +16,7 @@ from flask import (
     make_response,
 )
 from .utils.db import insert_user_response
-from .utils import trial_store, debrief as debrief_store
+from .utils import trial_store, debrief as debrief_store, prize_draw
 from .utils import db as database
 from .utils.chat_safety import filter_idk_reply
 from .utils.security import csrf_token, validate_csrf
@@ -23,7 +24,7 @@ from .utils.surveys import (
     POST_ITEMS, FINAL_ITEMS, FINAL_TEXT_ITEMS, FINAL_CHANGE_ITEMS, FINAL_CHANGE_TEXT_ITEMS,
     FINAL_LIKERT_ITEMS, FINAL_ALL_TEXT_ITEMS, LIKERT, NOT_NEEDED_ITEMS, valid_rating,
 )
-from .utils.provenance import runtime_metadata, prompt_hash, option_mentions, stated_option
+from .utils.provenance import runtime_metadata, prompt_hash, option_mentions, stated_option, option_id
 from .utils.participants import (
     PARTICIPANT_COOKIE,
     PARTICIPANT_COOKIE_MAX_AGE,
@@ -234,7 +235,8 @@ def _restore_progress():
 def study_context():
     site = get_site(session.get("site")) or get_site("uzh")
     return {"csrf_token": csrf_token, "research_note": site["research_note"], "withdrawal_deadline": debrief_store.deadline(),
-            "not_needed_items": NOT_NEEDED_ITEMS}
+            "not_needed_items": NOT_NEEDED_ITEMS, "is_uzh": session.get("site", DEFAULT_SITE) == "uzh",
+            "prize_draw_enabled": prize_draw.enabled()}
 
 
 main_bp.before_request(validate_csrf)
@@ -243,7 +245,7 @@ main_bp.before_request(validate_csrf)
 @main_bp.before_request
 def protect_progress():
     endpoint = request.endpoint or ""
-    ajax_endpoints = {"main.chat", "main.initial_recommendation", "main.choose_path"}
+    ajax_endpoints = {"main.chat", "main.initial_recommendation", "main.choose_path", "main.trial_visible"}
     protected = {"main.quiz", "main.post_survey", "main.final_survey", "main.pre_survey",
                  "main.collect_demographics", "main.instructions"} | ajax_endpoints
     if endpoint not in protected:
@@ -254,7 +256,7 @@ def protect_progress():
         return redirect(url_for("main.index"))
     participant = get_participant(session["participant_id"])
     if participant and participant.get("completed_at"):
-        return redirect(url_for("main.debrief"))
+        return redirect(url_for("main.completion" if participant.get("site") == "uzh" else "main.debrief"))
     if "answers" in session or "chat_transcript" in session:
         trial_store.migrate_session(session)
         for key in ("answers", "times", "post_survey_answers", "chat_history", "chat_transcript", "final_survey_answers"):
@@ -283,7 +285,7 @@ def prevent_stale_pages(response):
     response.headers["Referrer-Policy"] = "same-origin"
     # AJAX reads the assignment and cursor but never writes a stale session
     # snapshot back over a simultaneous answer/rating request.
-    if request.endpoint in {"main.chat", "main.initial_recommendation", "main.choose_path"}:
+    if request.endpoint in {"main.chat", "main.initial_recommendation", "main.choose_path", "main.trial_visible"}:
         session.modified = False
     return response
 
@@ -319,7 +321,7 @@ def _enter_site(site_key):
     participant = get_participant(request.cookies.get(PARTICIPANT_COOKIE))
     if participant is not None:
         if participant["completed_at"] is not None:
-            return render_template("already_completed.html")
+            return render_template("already_completed.html", is_uzh=participant.get("site") == "uzh")
         if session.get("participant_id") == participant["participant_id"]:
             # Session still holds their progress: continue where they were.
             return redirect(_resume_url())
@@ -568,6 +570,7 @@ def quiz():
             # written before `is_error` existed default to "not an error".
             successful_followup_chat = [
                 e for e in followup_chat if not e.get("is_error", False)
+                and e.get("response_status") != "pending" and not e.get("after_answer", False)
             ]
 
             n_changes = _form_count("n_changes")
@@ -611,7 +614,7 @@ def quiz():
                 "correct_option_place": _option_place(displayed_options, question["correct"]),
                 "target_wrong_option_place": _option_place(displayed_options, target_wrong_answer),
                 "position": position_0idx + 1,
-                "section": section_for_position(position_0idx + 1),
+                "section": section_for_position(position_0idx + 1, session.get("sequence_design_version")),
                 "sequence_id": session.get("sequence_label"),
                 "sequence_design_version": session.get("sequence_design_version"),
                 "trial_type": variant_shown,
@@ -635,6 +638,9 @@ def quiz():
                 "reliance_code": reliance_code,
 
                 "timestamps": {
+                    **(trial_store.trial_visibility(session["participant_id"], position_0idx)
+                       if session.get("site") == "uzh" else {}),
+                    "ai_requested_at": (_initial_recommendation_entry(current_q_index) or {}).get("timestamp"),
                     "served_at": session.get("trial_served_at"),
                     # Answer options stay locked until one of the two path
                     # buttons is pressed, so that click is the first
@@ -700,6 +706,16 @@ def quiz():
 
                 "confidence_rating": confidence_rating,
             }
+
+            if session.get("site") == "uzh":
+                answer_data.update({
+                    "first_route": access["path"],
+                    "option_ids": {option_id(question, opt): opt for opt in question["options"]},
+                    "initial_option_id": option_id(question, pre_ai_fields["pre_ai"]["answer"]),
+                    "ai_endorsed_option_id": option_id(question, ai_endorsed_answer),
+                    "correct_option_id": option_id(question, question["correct"]),
+                    "final_option_id": option_id(question, final_answer),
+                })
 
             trial_store.record_answer(session["participant_id"], position_0idx, answer_data)
 
@@ -801,6 +817,31 @@ def _recommendation_payload(text, access):
     return payload
 
 
+@main_bp.route("/trial_visible", methods=["POST"])
+def trial_visible():
+    if session.get("site") != "uzh" or not _trial_in_progress():
+        return jsonify({"error": "No active question"}), 409
+    params = _request_params()
+    event = params.get("event")
+    if not isinstance(event, str) or event not in {"question", "recommendation"}:
+        return jsonify({"error": "Unknown event"}), 400
+    try:
+        visible = datetime.datetime.fromisoformat(params.get("visible_at", "").replace("Z", "+00:00"))
+        if visible.tzinfo is None:
+            raise ValueError("Timezone required")
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"error": "Invalid visibility time"}), 400
+    q_index = session["question_order"][session["question_index"]]
+    if event == "recommendation" and _initial_recommendation_entry(q_index) is None:
+        return jsonify({"error": "Request the recommendation first"}), 409
+    trial_store.record_visibility(
+        session["participant_id"], session["question_index"], q_index, event,
+        visible.astimezone(datetime.timezone.utc).isoformat(),
+        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    )
+    return jsonify({"ok": True})
+
+
 @main_bp.route("/get_initial_recommendation", methods=["GET", "POST"])
 def initial_recommendation():
     if "question_order" not in session:
@@ -857,7 +898,7 @@ def initial_recommendation():
         **runtime_metadata(),
         "is_initial_recommendation": True,
         "is_error": False,
-        "shown_to_participant": True,
+        "shown_to_participant": session.get("site") != "uzh",
         "timestamp": now,
         "user_message": user_message,
         "assistant_message": recommendation["recommendation"],
@@ -874,6 +915,7 @@ def initial_recommendation():
 
 @main_bp.route("/chat", methods=["POST"])
 def chat():
+    sent_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     body = request.get_json(silent=True)
     user_message = body.get("message") if isinstance(body, dict) else None
     if "question_order" not in session:
@@ -892,9 +934,13 @@ def chat():
     # when the reply came back, which can be after the answer was submitted
     # (`after_answer`); every logged message was sent before it, because the
     # check above refuses messages once the answer is in.
-    sent_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     current_q_index = None
     position = session["question_index"]
+    request_id = None
+    if session.get("site") == "uzh":
+        request_id = trial_store.begin_followup(
+            session["participant_id"], position, session["question_order"][position], user_message, sent_at,
+        )
     try:
         # current_q_index/variant are re-derived from the session on every call,
         # so each request's system prompt reflects only the trial currently in
@@ -931,7 +977,7 @@ def chat():
             messages.append({"role": "assistant", "content": turn["assistant_message"]})
         messages.append({"role": "user", "content": user_message})
 
-        request_metadata = {**runtime_metadata(), "requested_model": OPENAI_MODEL,
+        request_metadata = {**runtime_metadata(), **({"request_id": request_id} if request_id else {}), "requested_model": OPENAI_MODEL,
                             "prompt_hash": prompt_hash(system_message), "system_prompt": system_message,
                             "max_completion_tokens": OPENAI_MAX_COMPLETION_TOKENS}
         response = client.chat.completions.create(
@@ -1044,6 +1090,7 @@ def chat():
                 "error_reason": "api_exception",
                 "error_detail": type(e).__name__,
                 **locals().get("request_metadata", runtime_metadata()),
+                **({"request_id": request_id} if request_id else {}),
                 "shown_to_participant": False,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "sent_at": sent_at,
@@ -1223,9 +1270,75 @@ def final_survey():
         mark_completed(combined_data["participant_id"])
         debrief_store.withdrawal_code(combined_data["participant_id"])
 
-        return redirect(url_for("main.debrief"))
+        return redirect(url_for("main.completion" if combined_data["site"] == "uzh" else "main.debrief"))
 
     return _render_final_survey()
+
+
+def _finished_participant():
+    """The participant who finished this study in this session or browser, or None."""
+    pid = session.get("participant_id") or request.cookies.get(PARTICIPANT_COOKIE)
+    participant = get_participant(pid)
+    # Do not reveal the manipulation before final answers/suspicion questions.
+    if not participant or not participant.get("completed_at"):
+        return None
+    return participant
+
+
+def _study_explanation(participant):
+    """The page after the final survey, at every site: the study explanation
+    (debrief), the data-use choice and the withdrawal code, plus the optional
+    prize draw. Results open only after the choice, so nobody reaches them
+    without the explanation and the code, and every finished record gets a
+    keep/withdraw decision (the export skips records still "pending").
+
+    One form, three submit buttons: "Join the draw" (action=join_draw) saves
+    only the email and returns here; "Yes, use my responses" (choice=keep) and
+    the folded-away "Withdraw my responses" (choice=withdraw) record the choice,
+    also save an email typed into the draw field, and lead to the results."""
+    pid = participant["participant_id"]
+    decision = participant.get("data_use")
+    show_draw = prize_draw.enabled()
+    error = draw_error = None
+    draw_email = ""
+    if request.method == "POST":
+        choice = request.form.get("choice")
+        joining = request.form.get("action") == "join_draw"
+        draw_email = prize_draw.normalise(request.form.get("draw_email")) if show_draw else ""
+        if draw_email and not prize_draw.is_valid(draw_email):
+            draw_error = "Please enter a valid email address, or leave the field empty."
+        elif joining and not draw_email:
+            draw_error = "Please enter your email address to join the draw."
+        elif not joining and choice not in {"keep", "withdraw"}:
+            error = "Please choose whether we may use your responses."
+        else:
+            if draw_email:
+                prize_draw.enter(pid, participant.get("site"), draw_email)
+            if joining:
+                return redirect(url_for(request.endpoint) + "#prize-draw")
+            # Re-submitting the saved choice keeps its original decision time.
+            if choice != decision:
+                debrief_store.choose(pid, choice)
+            return redirect(url_for("main.results"))
+    html = render_template(
+        "completion.html", error=error, decision=decision,
+        withdrawal_code=debrief_store.withdrawal_code(pid),
+        is_uzh=participant.get("site") == "uzh",
+        research_note=get_site(participant["site"])["research_note"],
+        show_draw=show_draw, draw_entered=bool(participant.get("prize_draw_entered")),
+        draw_email=draw_email, draw_error=draw_error,
+    )
+    return (html, 400) if error or draw_error else html
+
+
+@main_bp.route("/completion", methods=["GET", "POST"])
+def completion():
+    participant = _finished_participant()
+    if participant is None:
+        return redirect(url_for("main.index"))
+    if participant.get("site") != "uzh":
+        return redirect(url_for("main.debrief"))
+    return _study_explanation(participant)
 
 
 @main_bp.route("/thank_you")
@@ -1235,27 +1348,78 @@ def thank_you():
 
 @main_bp.route("/debrief", methods=["GET", "POST"])
 def debrief():
-    pid = session.get("participant_id") or request.cookies.get(PARTICIPANT_COOKIE)
-    participant = get_participant(pid)
-    # Do not reveal the manipulation before final answers/suspicion questions.
-    if not participant or not participant.get("completed_at"):
+    """Other sites' address for the same page as /completion. UZH visits are
+    sent to /completion; a UZH POST here is still accepted."""
+    participant = _finished_participant()
+    if participant is None:
         return redirect(url_for("main.index"))
-    if request.method == "POST":
-        choice = request.form.get("choice")
-        if choice not in {"keep", "withdraw"}:
-            return "Please choose whether to allow use or withdraw your responses.", 400
-        debrief_store.choose(pid, choice)
-        return redirect(url_for("main.thank_you"))
-    assignment = get_assignment(pid) or {}
-    # The answer list stays hidden while data are being collected, so that it
-    # cannot spread to students who have not taken part yet. Set
-    # DEBRIEF_SHOW_ANSWERS=true once recruitment has closed.
-    show_answers = os.getenv("DEBRIEF_SHOW_ANSWERS", "false").lower() == "true"
-    return render_template("debrief.html", withdrawal_code=debrief_store.withdrawal_code(pid),
-                           withdrawal_deadline=debrief_store.deadline(), decision=participant.get("data_use"),
-                           research_note=get_site(participant["site"])["research_note"],
-                           show_answers=show_answers,
-                           questions=[questions[q] for q in assignment.get("question_order", [])])
+    if participant.get("site") == "uzh" and request.method == "GET":
+        return redirect(url_for("main.completion"))
+    return _study_explanation(participant)
+
+
+def _study_link(site_key):
+    """UZH shares only an explicitly configured public entry URL.
+
+    Retain the existing request-origin fallback for other sites.
+    """
+    path = url_for("main.index") if site_key == DEFAULT_SITE else url_for("main.start", site_key=site_key)
+    base = os.getenv("STUDY_PUBLIC_URL", "").strip()
+    if site_key == "uzh":
+        try:
+            parsed = urlsplit(base)
+        except ValueError:
+            logger.warning("UZH sharing disabled: STUDY_PUBLIC_URL is malformed")
+            return None
+        if (parsed.scheme in {"http", "https"} and parsed.netloc
+                and not parsed.username and not parsed.password
+                and not parsed.query and not parsed.fragment
+                and parsed.path.rstrip("/") in {"", "/start/uzh"}):
+            return base
+        logger.warning("UZH sharing disabled: configure STUDY_PUBLIC_URL as a public study entry URL (origin or /start/uzh), without query or fragment")
+        return None
+    if base:
+        return base.rstrip("/") + path
+    scheme = request.headers.get("X-Forwarded-Proto", request.scheme).split(",")[0].strip()
+    return f"{scheme}://{request.host}{path}"
+
+
+@main_bp.route("/results")
+def results():
+    """
+    The participant's own score and answers, shown once everything is
+    submitted and the keep/withdraw choice is made (at every site), whatever
+    the choice. The page asks them not to save or share the questions or
+    answers, discourages copying and printing, and offers the study link to
+    share.
+    """
+    participant = _finished_participant()
+    if participant is None:
+        return redirect(url_for("main.index"))
+    pid = participant["participant_id"]
+    if participant.get("data_use") not in {"keep", "withdraw"}:
+        is_uzh = participant.get("site") == "uzh"
+        return redirect(url_for("main.completion" if is_uzh else "main.debrief"))
+
+    items = []
+    for trial in trial_store.trials_for(pid):
+        record = trial["answer"]
+        question = questions[trial["question_index"]]
+        correct = question["correct"]
+        items.append({
+            "position": trial["position"] + 1,
+            "code": question["question"],
+            "answer": record.get("answer"),
+            "correct": correct,
+            "is_correct": record.get("answer") == correct,
+        })
+    return render_template(
+        "results.html",
+        items=items,
+        n_correct=sum(item["is_correct"] for item in items),
+        is_uzh=participant.get("site") == "uzh",
+        study_link=_study_link(participant.get("site") or DEFAULT_SITE),
+    )
 
 
 @main_bp.route("/withdraw", methods=["GET", "POST"])
