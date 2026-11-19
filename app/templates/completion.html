@@ -1,0 +1,115 @@
+{% extends "base.html" %}{% block content %}
+{# The first page after the final survey (UZH: /completion, other sites:
+   /debrief). It offers the optional prize draw, explains the study
+   (debrief), gives the withdrawal code and asks to use the responses. The
+   results open only after that choice, so nobody leaves without the
+   explanation or the code. Withdrawing is folded away behind a second click
+   so it cannot be chosen by accident. #}
+<div class="end-page">
+  <header class="end-hero">
+    <div class="end-hero-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+    </div>
+    <h2>Thank you! You’ve completed the study</h2>
+    <p>Your answers have been saved.</p>
+  </header>
+
+  {% set end_step = 1 %}{% include "_end_steps.html" %}
+
+  {# One form: "Join the draw" saves only the email (and is the button Enter
+     uses in the email field); the choice buttons also save a typed email. #}
+  <form method="POST" action="{{ request.path }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    {% if show_draw %}
+    <section class="draw-card" id="prize-draw" aria-labelledby="draw-heading">
+      {% if draw_entered %}
+      <p class="draw-done" role="status"><span class="draw-done-icon" aria-hidden="true">&#10003;</span><span id="draw-heading">You’ve joined the prize draw. We will contact you by email if you win.</span></p>
+      {% else %}
+      <h3 id="draw-heading">Join the prize draw <span class="optional-tag">optional</span></h3>
+      {# Add the prize and the draw date here once they are confirmed. #}
+      <p>If you would like to take part in the prize draw, leave your email address.</p>
+      <div class="copy-row">
+        <label class="visually-hidden" for="draw-email">Email address</label>
+        <input type="email" id="draw-email" name="draw_email" value="{{ draw_email }}" maxlength="254"
+               autocomplete="email" placeholder="your.email@example.com"
+               aria-describedby="draw-note{% if draw_error %} draw-error{% endif %}"{% if draw_error %} aria-invalid="true"{% endif %}>
+        <button type="submit" name="action" value="join_draw" class="end-btn end-btn-secondary end-btn-small">Join the draw</button>
+      </div>
+      {% if draw_error %}<p class="end-error" id="draw-error" role="alert">{{ draw_error }}</p>{% endif %}
+      <p class="draw-note" id="draw-note">Your email is stored separately from your answers, used only to contact the winners and deleted after the draw. Joining does not depend on anything else on this page.</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <p class="end-lead">Before you see your results, please read this short explanation of the study. It takes about a minute.</p>
+
+    <section class="end-section" aria-labelledby="about-heading">
+      <h3 id="about-heading">What we were studying</h3>
+      <p>We want to understand how students rely on an AI assistant when solving programming questions, and whether this changes when the assistant sometimes says it is not sure.</p>
+    </section>
+
+    <section class="end-section" aria-labelledby="reveal-heading">
+      <h3 id="reveal-heading">What we could not tell you before</h3>
+      <p>The assistant’s first recommendation on each question was prepared in advance by the research team:</p>
+      <ul class="trial-kinds">
+        <li><span class="kind kind-correct">Correct</span><span>On most questions, the recommendation was correct.</span></li>
+        <li><span class="kind kind-wrong">Wrong on purpose</span><span>On some questions, it gave a wrong answer while sounding sure.</span></li>
+        <li><span class="kind kind-unsure">Not sure</span><span>On some questions, it said it was not sure and gave no answer.</span></li>
+      </ul>
+      <p>The replies in the chat were written by an AI model. When the assistant said it was not sure, it was told not to solve that question for you.</p>
+      <p>We did not tell you this earlier because it would have changed how you used the assistant. Following a confident but wrong recommendation is very common, so your score is not a measure of your programming ability.</p>
+    </section>
+
+    <aside class="end-callout" aria-label="Please keep this to yourself">
+      <strong>Please keep this to yourself</strong>
+      Other students are still taking part. If they knew about the questions, the answers or the wrong recommendations, their results could no longer be used.
+    </aside>
+
+    <section class="end-section end-choice" aria-labelledby="choice-heading">
+      <h3 id="choice-heading">May we use your responses?</h3>
+      {% if decision == 'withdraw' %}
+      <p class="end-status">You withdrew your responses. They will not be used in the research.</p>
+      <div class="end-actions">
+        <a href="{{ url_for('main.results') }}" class="end-btn end-btn-primary">See my results</a>
+      </div>
+      {% else %}
+      {% if decision == 'keep' %}
+      <p>You have allowed us to use your responses. Thank you!</p>
+      {% else %}
+      <p>Now that you know how the study worked, please confirm that we may include your answers in the research.</p>
+      {% endif %}
+
+      <div class="code-box">
+        <p class="code-box-title">If you change your mind later</p>
+        <p>Save this withdrawal code. You can use it on the <a href="{{ url_for('main.withdraw') }}">withdrawal page</a>{% if withdrawal_deadline %} until {{ withdrawal_deadline }}{% endif %} to remove your responses.</p>
+        <div class="copy-row">
+          <code id="withdrawal-code">{{ withdrawal_code }}</code>
+          <button type="button" class="end-btn end-btn-secondary end-btn-small" data-copy-target="withdrawal-code">Copy code</button>
+        </div>
+      </div>
+
+      {% if error %}<p class="end-error" role="alert">{{ error }}</p>{% endif %}
+      <div class="end-actions">
+        <button type="submit" name="choice" value="keep" class="end-btn end-btn-primary">
+          {{ 'See my results' if decision == 'keep' else 'Yes, use my responses and see my results' }}
+        </button>
+      </div>
+
+      <details class="withdraw-option">
+        <summary>I don’t want my responses to be used</summary>
+        <div class="withdraw-panel">
+          <p><strong>Withdraw your responses?</strong> Your answers will be removed from the research. This cannot be undone. You will still see your results.</p>
+          <button type="submit" name="choice" value="withdraw" class="end-btn end-btn-danger end-btn-small">Withdraw my responses</button>
+        </div>
+      </details>
+      {% endif %}
+    </section>
+  </form>
+
+  <footer class="end-contact">
+    <p>{{ research_note|urlize }}</p>
+  </footer>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/end_pages.js') }}"></script>{% endblock %}

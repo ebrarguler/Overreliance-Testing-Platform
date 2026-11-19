@@ -1,0 +1,11 @@
+{# Progress after the final survey. Set `end_step` (1 = about the study,
+   2 = results) before including. The questions and surveys are already done. #}
+<ol class="end-steps" aria-label="Your progress">
+  <li class="is-done"><span class="end-step-num" aria-hidden="true">&#10003;</span><span class="end-step-label">Questions and surveys</span></li>
+  <li class="{{ 'is-done' if end_step > 1 else 'is-current' }}"{% if end_step == 1 %} aria-current="step"{% endif %}>
+    <span class="end-step-num" aria-hidden="true">{% if end_step > 1 %}&#10003;{% else %}2{% endif %}</span><span class="end-step-label">About the study</span>
+  </li>
+  <li class="{{ 'is-current' if end_step == 2 }}"{% if end_step == 2 %} aria-current="step"{% endif %}>
+    <span class="end-step-num" aria-hidden="true">3</span><span class="end-step-label">Your results</span>
+  </li>
+</ol>

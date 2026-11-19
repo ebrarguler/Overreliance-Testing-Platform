@@ -1,0 +1,77 @@
+{% extends "base.html" %}{% block content %}
+<div class="end-page">
+  {% set end_step = 2 %}{% include "_end_steps.html" %}
+
+  <h2>Your results</h2>
+
+  <div class="score-card">
+    <p class="score-number"><span class="score-value">{{ n_correct }}</span><span class="score-total">/ {{ items|length }}</span></p>
+    <div class="score-detail">
+      <p class="score-label">questions answered correctly</p>
+      <ol class="score-strip" aria-label="Jump to a question">
+        {% for item in items %}
+        <li><a href="#q{{ item.position }}" class="{{ 'is-correct' if item.is_correct else 'is-incorrect' }}"
+               title="Question {{ item.position }}: {{ 'correct' if item.is_correct else 'incorrect' }}"
+               aria-label="Question {{ item.position }}: {{ 'correct' if item.is_correct else 'incorrect' }}">{{ item.position }}</a></li>
+        {% endfor %}
+      </ol>
+    </div>
+  </div>
+  <p class="end-muted">On some questions the assistant was wrong on purpose, so this score is not a measure of your programming ability.</p>
+
+  <aside class="end-callout" aria-label="Please keep the answers to yourself">
+    <strong>Please keep the answers to yourself</strong>
+    Other students may still take part. Please do not save, copy or share the questions or answers below: knowing them would change their results.
+  </aside>
+
+  <section aria-labelledby="review-heading">
+    <div class="review-head">
+      <h3 id="review-heading">Review your answers</h3>
+      <button type="button" id="toggle-all" class="link-button" aria-controls="results-list" hidden>Expand all</button>
+    </div>
+    {# Copying, the context menu and printing are blocked for this list
+       (style.css, end_pages.js). Screenshots cannot be prevented. #}
+    <div class="results-list" id="results-list">
+      {% for item in items %}
+      <details class="result-item {{ 'is-correct' if item.is_correct else 'is-incorrect' }}" id="q{{ item.position }}">
+        <summary>
+          <span class="result-mark" aria-hidden="true">{{ '✓' if item.is_correct else '✗' }}</span>
+          <span class="result-title">Question {{ item.position }}</span>
+          <span class="result-status">{{ 'Correct' if item.is_correct else 'Incorrect' }}</span>
+          <span class="result-chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="result-body">
+          <pre><code>{{ item.code }}</code></pre>
+          <dl class="result-answers">
+            <dt>Your answer</dt>
+            <dd class="{{ 'is-right' if item.is_correct else 'is-wrong' }}">{{ item.answer }}</dd>
+            {% if not item.is_correct %}
+            <dt>Correct answer</dt>
+            <dd class="is-right">{{ item.correct }}</dd>
+            {% endif %}
+          </dl>
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    <p class="results-print-note">The answers are not included when printing.</p>
+  </section>
+
+  {% if study_link %}
+  <section class="share-card" aria-labelledby="share-heading">
+    <h3 id="share-heading">Know someone who might like to take part?</h3>
+    <p>You are welcome to share the study link with other students, and your score if you like.</p>
+    <div class="copy-row">
+      <input type="text" id="study-link" value="{{ study_link }}" readonly aria-label="Study link">
+      <button type="button" class="end-btn end-btn-secondary end-btn-small" data-copy-target="study-link">Copy link</button>
+    </div>
+  </section>
+  {% endif %}
+
+  <div class="end-actions">
+    {% if is_uzh %}<a href="{{ url_for('main.completion') }}" class="end-btn end-btn-secondary">Back to the study explanation</a>{% endif %}
+    <a href="{{ url_for('main.thank_you') }}" class="end-btn end-btn-primary">Finish</a>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/end_pages.js') }}"></script>{% endblock %}
